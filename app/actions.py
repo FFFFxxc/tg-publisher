@@ -129,13 +129,7 @@ async def h_generate_ai(w, payload):
     rt = await w.rt.view()
     if not rt.ai_enabled:
         raise ValueError("AI выключен")
-    await w.db.set_ai(pid, AI_UNCHECKED, None, None)
-    post = await w.db.load_post(pid)
-    ent = await resolve(w.client, post.source_ref)
-    msgs = [m for m in await w.client.get_messages(ent, ids=post.source_msg_ids) if m]
-    with tempfile.TemporaryDirectory() as tmp:
-        image = await w._preview_image(msgs, [], tmp, post.id)
-        await w._ai(post, image, rt)
+    await w.prepare_caption(pid, force=True)
     cur = await w.db.get_post(pid)
     return {"ai_status": cur["ai_status"], "ai_caption": cur["ai_caption"], "post_id": pid}
 

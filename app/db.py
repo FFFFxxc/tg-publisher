@@ -634,6 +634,18 @@ class DB:
         await self._q("UPDATE posts SET ai_status=%s, ai_caption=%s, ai_error=%s, updated_at=now() WHERE id=%s",
                       (status, caption, error, pid))
 
+    async def next_caption_post(self):
+        rows = await self._q("SELECT id FROM posts WHERE kind='parsed' AND status IN ('candidate','pending') "
+                             "AND ai_status='unchecked' AND send_started_at IS NULL "
+                             "AND cardinality(dest_msg_ids)=0 ORDER BY id LIMIT 1")
+        return rows[0]['id'] if rows else None
+
+    async def set_manual_caption(self, pid, caption):
+        rows = await self._q("UPDATE posts SET ai_status='manual',ai_caption=%s,ai_error=NULL,updated_at=now() "
+                             "WHERE id=%s AND status IN ('candidate','pending','failed','expired') "
+                             "AND send_started_at IS NULL AND cardinality(dest_msg_ids)=0 RETURNING id", (caption, pid))
+        return bool(rows)
+
     async def mark_send_started(self, pid):
         await self._q("UPDATE posts SET send_started_at=now(), updated_at=now() WHERE id=%s", (pid,))
 

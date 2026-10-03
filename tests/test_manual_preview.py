@@ -50,12 +50,12 @@ class ManualPreviewTests(unittest.IsolatedAsyncioTestCase):
             w = Worker(make_cfg(ai_enabled=True, session_path=str(Path(tmp)/'userbot')), db, client)
             seen = []
 
-            async def caption(post, image, rt):
+            async def caption(post, image, rt, *args):
                 seen.append((image, Path(image).read_bytes() if image else None))
                 await db.set_ai(post.id, 'generated', 'Готовая подпись')
 
             w._ai = caption
-            with patch('app.actions.resolve', AsyncMock(return_value='source')):
+            with patch('app.worker.resolve', AsyncMock(return_value='source')):
                 result = await h_generate_ai(w, {'post_id': 5})
             return seen, client.downloads, result
 

@@ -391,6 +391,22 @@ async def h_post_ai(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_post_caption(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    pid = _path_id(request)
+    body = await body_json(request)
+    caption = body.get('caption')
+    if set(body) != {'caption'} or not isinstance(caption, str) or not caption.strip() or len(caption.encode('utf-16-le')) // 2 > 4096:
+        raise ValueError('Введите подпись от 1 до 4096 символов')
+    if not await ctx.db.get_post(pid):
+        raise LookupError('Пост не найден')
+    async with ctx.worker.caption_locks.setdefault(pid, asyncio.Lock()):
+        if not await ctx.db.set_manual_caption(pid, caption.strip()):
+            return jr({'error': 'Пост уже отправлен или обрабатывается'}, status=409)
+    return jr({'ok': True, 'ai_status': 'manual', 'ai_caption': caption.strip()})
+
+
+@handler
 async def h_schedule_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     v = await ctx.settings.api_view()
@@ -717,6 +733,7 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/posts/{id}/skip", h_post_skip)
     r.add_post("/api/posts/{id}/ai", h_post_ai)
     r.add_put("/api/posts/{id}/schedule", h_post_schedule)
+    r.add_put("/api/posts/{id}/caption", h_post_caption)
     r.add_get("/api/schedule", h_schedule_get)
     r.add_put("/api/schedule", h_schedule_put)
     r.add_get("/api/settings", h_settings_get)

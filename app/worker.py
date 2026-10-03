@@ -71,6 +71,7 @@ class Worker:
         self.heartbeat: dict[str, float] = {}
         self.dest = None
         self.own_sid = None
+        self.caption_locks: dict[int, asyncio.Lock] = {}
         self.previews = PreviewCache(client, Path(cfg.session_path).parent / 'previews')
 
     async def _dest(self):
@@ -266,6 +267,11 @@ class Worker:
         return await self.db.claim_best_own(own_sid, rt.own_min_age_days, rt.repost_cooldown_days)
 
     async def _run(self, post):
+        async with self.caption_locks.setdefault(post.id, asyncio.Lock()):
+            current = await self.db.load_post(post.id)
+            await self._run_locked(current or post)
+
+    async def _run_locked(self, post):
         rt = await self.rt.view()
         tmp = tempfile.mkdtemp(prefix=f"post{post.id}_")
         try:
@@ -282,6 +288,8 @@ class Worker:
         return kind == 'id' and value in (LINK_ALLOWED_CHANNEL_ID, -1000000000000 - LINK_ALLOWED_CHANNEL_ID)
 
     async def _ai(self, post, image: str | None, rt, source_entity=None, source_entities=None):
+        if post.ai_status == 'manual':
+            return post.ai_caption
         if post.kind != PARSED or not rt.ai_enabled:
             return None
         allow_links = self._source_links_allowed(post, source_entity)
@@ -509,6 +517,40 @@ class Worker:
         rt = await self.rt.view()
         return rt.collect_interval
 
+    async def prepare_caption(self, pid: int, force=False):
+        async with self.caption_locks.setdefault(pid, asyncio.Lock()):
+            row = await self.db.get_post(pid)
+            if not row or row['kind'] != PARSED or row['status'] not in ('candidate','pending','failed','expired'):
+                return
+            if row.get('send_started_at') or row.get('dest_msg_ids'):
+                return
+            if not force and row['ai_status'] != AI_UNCHECKED:
+                return
+            rt = await self.rt.view()
+            if not rt.ai_enabled:
+                return
+            if force:
+                await self.db.set_ai(pid, AI_UNCHECKED)
+            post = await self.db.load_post(pid)
+            try:
+                entity = await resolve(self.client, post.source_ref)
+                msgs = [m for m in await self.client.get_messages(entity, ids=post.source_msg_ids) if m]
+                with tempfile.TemporaryDirectory() as tmp:
+                    image = await self._preview_image(msgs, [], tmp, pid)
+                    await self._ai(post, image, rt, entity)
+            except (AIError, asyncio.TimeoutError):
+                log.warning('queue caption failed post=%s', pid)
+            except Exception as exc:
+                await self.db.set_ai(pid, AI_FAILED, error=f'{type(exc).__name__}: {exc}')
+                log.warning('queue caption preparation failed post=%s: %s', pid, type(exc).__name__)
+
+    async def caption_tick(self):
+        if not (await self.rt.view()).ai_enabled:
+            return
+        pid = await self.db.next_caption_post()
+        if pid is not None:
+            await self.prepare_caption(pid)
+
     async def loop(self, name, interval, fn):
         log.info("loop %s started", name)
         while True:
@@ -541,16 +583,19 @@ class Worker:
     async def run(self):
         log.info("worker v%s starting %r", __version__, self.cfg)
         await self.db.recover()
+        await self.db._q("UPDATE posts SET ai_status='unchecked',ai_error=NULL WHERE ai_status='processing' "
+                         "AND status IN ('candidate','pending') AND send_started_at IS NULL AND cardinality(dest_msg_ids)=0")
         # зависшие actions от прошлого процесса: processing -> failed, дублей публикации нет
         await self.db.fail_stale_actions(0, "interrupted by worker restart")
         await events.log_event(self.db, events.WORKER_STARTED, message=f"v{__version__}")
         pub_every = 30 if self.cfg.publish_times else self.cfg.publish_interval
-        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5, "promo": 30}
+        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5, "promo": 30, "captions": 120}
         await asyncio.gather(self.loop("collect", self._collect_interval, self.collect_once),
                              self.loop("publish", pub_every, self.publish_tick),
                              self.loop("actions", 5, self.actions_tick),
                              self.loop("scheduled", 5, self.scheduled_tick),
                              self.loop("promo", 30, PromoPublisher(self).tick),
+                             self.loop("captions", 5, self.caption_tick),
                              self.watchdog(limits))
 
 
