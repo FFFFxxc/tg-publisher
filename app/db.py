@@ -91,6 +91,18 @@ CREATE TABLE IF NOT EXISTS own_posts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS promo_runs (
+    slot TEXT PRIMARY KEY,
+    source_ref TEXT NOT NULL,
+    group_key TEXT,
+    source_msg_ids BIGINT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'sending',
+    dest_msg_ids BIGINT[] NOT NULL DEFAULT '{}',
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(source_ref, group_key)
+);
 ALTER TABLE own_posts ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'unknown';
 
 -- постоянные действия панели (исполняются воркером, не HTTP-запросом)
@@ -317,6 +329,30 @@ class DB:
     async def kv_get(self, k, default=None):
         r = await self._q("SELECT v FROM kv WHERE k=%s", (k,))
         return r[0]["v"] if r else default
+
+    async def promo_has_slot(self, slot):
+        return bool(await self._q('SELECT 1 FROM promo_runs WHERE slot=%s', (slot,)))
+
+    async def promo_used(self, ref):
+        rows = await self._q('SELECT group_key FROM promo_runs WHERE source_ref=%s AND group_key IS NOT NULL', (ref,))
+        return {r['group_key'] for r in rows}
+
+    async def promo_claim(self, slot, ref, group_key, ids):
+        return bool(await self._q(
+            'INSERT INTO promo_runs(slot,source_ref,group_key,source_msg_ids) SELECT %s,%s,%s,%s '
+            "WHERE COALESCE((SELECT v::double precision FROM kv WHERE k='promo_retry_after'),0) "
+            '<= EXTRACT(EPOCH FROM now()) '
+            'ON CONFLICT DO NOTHING RETURNING slot', (slot, ref, group_key, ids)))
+
+    async def promo_finish(self, slot, status, ids=(), error=None):
+        await self._q('UPDATE promo_runs SET status=%s,dest_msg_ids=%s,error=%s,updated_at=now() WHERE slot=%s',
+                      (status, list(ids), error, slot))
+
+    async def promo_defer(self, slot, retry_after):
+        await self._q("WITH cooldown AS (INSERT INTO kv(k,v) VALUES ('promo_retry_after',%s) "
+                      "ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v RETURNING k) "
+                      "DELETE FROM promo_runs WHERE slot=%s AND status='sending' "
+                      "AND EXISTS(SELECT 1 FROM cooldown)", (str(retry_after), slot))
 
     async def kv_set(self, k, v):
         await self._q("INSERT INTO kv VALUES (%s,%s) ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v", (k, str(v)))
