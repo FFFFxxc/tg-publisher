@@ -15,6 +15,10 @@ class FakeDB:
     def __init__(self):
         self.rows = []
         self.reacted = set()
+        self.kv = {}
+
+    async def kv_get(self, key, default=None): return self.kv.get(key, default)
+    async def kv_set(self, key, value): self.kv[key] = str(value)
 
     async def save_activity_account(self, aid, uid, phone, name, path):
         existing = next((row for row in self.rows if row["telegram_user_id"] == uid), None)
@@ -99,10 +103,22 @@ class ActivityAccountTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("session_path", (await service.list())[0])
             first = await service.react_now(result["account_id"])
             second = await service.react_now(result["account_id"])
-            self.assertEqual((first["reacted"], second["reacted"]), (2, 0))
+            third = await service.react_now(result["account_id"])
+            self.assertEqual((first["reacted"], second["reacted"], third["reacted"]), (1, 1, 0))
             self.assertEqual(db.reacted, {(result["account_id"], "@private", 1),
                                           (result["account_id"], "@private", 2)})
             await service.close()
+
+    async def test_activity_period_persists_and_validates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = FakeDB(); service = ActivityAccounts(cfg(tmp), db, FakeClient)
+            saved = await service.update_settings(15)
+            self.assertEqual(saved, {"interval_minutes": 15, "max_reactions_per_account": 1})
+            self.assertEqual(await service.settings(), saved)
+            self.assertTrue(service._settings_changed.is_set())
+            for value in (0, 1441, "bad", True):
+                with self.assertRaises(ValueError):
+                    await service.update_settings(value)
 
     async def test_disable_and_delete(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,6 +174,8 @@ class ActivityApiTests(unittest.IsolatedAsyncioTestCase):
             list=AsyncMock(return_value=[]), start_login=AsyncMock(return_value={"login_token": "t"}),
             complete_login=AsyncMock(return_value={"authorized": True}), set_enabled=AsyncMock(),
             delete=AsyncMock(), react_now=AsyncMock(return_value={"reacted": 1, "items": []}),
+            settings=AsyncMock(return_value={"interval_minutes": 10, "max_reactions_per_account": 1}),
+            update_settings=AsyncMock(return_value={"interval_minutes": 20, "max_reactions_per_account": 1}),
         )
         worker = SimpleNamespace(db=SimpleNamespace(), cfg=SimpleNamespace(), rt=SimpleNamespace(),
                                  activity=self.service)
@@ -184,6 +202,14 @@ class ActivityApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.patch("/api/activity-accounts/a1", json={"enabled": "yes"},
                                            headers=self.headers())
         self.assertEqual(response.status, 400)
+
+    async def test_activity_settings_routes(self):
+        response = await self.client.get("/api/activity-settings", headers=self.headers())
+        self.assertEqual((response.status, (await response.json())["interval_minutes"]), (200, 10))
+        response = await self.client.put("/api/activity-settings", json={"interval_minutes": 20},
+                                         headers=self.headers())
+        self.assertEqual((response.status, (await response.json())["interval_minutes"]), (200, 20))
+        self.service.update_settings.assert_awaited_once_with(20)
 
     async def test_react_failure_is_not_reported_as_success(self):
         self.service.react_now.return_value = {

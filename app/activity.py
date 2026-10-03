@@ -48,6 +48,7 @@ class ActivityAccounts:
         self.pending: dict[str, PendingLogin] = {}
         self.clients: dict[str, object] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._settings_changed = asyncio.Event()
 
     def _new_client(self, session_path: str):
         return self.client_factory(
@@ -126,6 +127,23 @@ class ActivityAccounts:
         return [{key: value for key, value in row.items() if key != "session_path"}
                 for row in await self.db.activity_accounts()]
 
+    async def settings(self) -> dict:
+        seconds = int(await self.db.kv_get("activity_interval_sec", str(self.cfg.activity_interval)))
+        return {"interval_minutes": max(1, seconds // 60), "max_reactions_per_account": 1}
+
+    async def update_settings(self, interval_minutes) -> dict:
+        if isinstance(interval_minutes, bool):
+            raise ValueError("Интервал должен быть целым числом минут")
+        try:
+            minutes = int(interval_minutes)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Интервал должен быть целым числом минут") from exc
+        if minutes < 1 or minutes > 1440:
+            raise ValueError("Интервал должен быть от 1 до 1440 минут")
+        await self.db.kv_set("activity_interval_sec", minutes * 60)
+        self._settings_changed.set()
+        return {"interval_minutes": minutes, "max_reactions_per_account": 1}
+
     async def set_enabled(self, account_id: str, enabled: bool) -> None:
         lock = self._locks.setdefault(account_id, asyncio.Lock())
         async with lock:
@@ -157,7 +175,7 @@ class ActivityAccounts:
                 return None
             try:
                 async with semaphore:
-                    count = await self._react_account(row)
+                    count = await self._react_account(row, limit=1)
                 return {"account_id": row["id"], "reacted": count, "status": "ready"}
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"[:500]
@@ -168,7 +186,7 @@ class ActivityAccounts:
         results = [result for result in await asyncio.gather(*(one(row) for row in rows)) if result]
         return {"items": results, "reacted": sum(item["reacted"] for item in results)}
 
-    async def _react_account(self, row: dict) -> int:
+    async def _react_account(self, row: dict, limit: int = 1) -> int:
         lock = self._locks.setdefault(row["id"], asyncio.Lock())
         async with lock:
             current = await self.db.activity_account(row["id"])
@@ -192,6 +210,8 @@ class ActivityAccounts:
                 ))
                 await self.db.mark_activity_reacted(row["id"], target_ref, message.id)
                 reacted += 1
+                if reacted >= limit:
+                    break
             await self.db.set_activity_account_status(row["id"], "ready")
             return reacted
 
@@ -227,7 +247,12 @@ class ActivityAccounts:
                 await self.react_now()
             except Exception:
                 log.exception("activity loop failed")
-            await asyncio.sleep(max(5, self.cfg.activity_interval))
+            seconds = int(await self.db.kv_get("activity_interval_sec", str(self.cfg.activity_interval)))
+            self._settings_changed.clear()
+            try:
+                await asyncio.wait_for(self._settings_changed.wait(), timeout=max(60, seconds))
+            except asyncio.TimeoutError:
+                pass
 
     async def close(self):
         for token, pending in list(self.pending.items()):

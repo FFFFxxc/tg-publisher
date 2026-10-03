@@ -1,6 +1,7 @@
 import { pubFetch } from "@/lib/api";
 import { Badge, Card, Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
 import ActivityLoginForm from "@/components/ActivityLoginForm";
+import ActivityPeriodForm from "@/components/ActivityPeriodForm";
 import ActionButton from "@/components/ActionButton";
 import { fmtDate } from "@/lib/format";
 
@@ -8,8 +9,13 @@ export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
   let data: any = { items: [] };
+  let settings: any = { interval_minutes: 1 };
   let error = "";
-  try { data = await pubFetch("/api/activity-accounts"); }
+  try {
+    [data, settings] = await Promise.all([
+      pubFetch("/api/activity-accounts"), pubFetch("/api/activity-settings"),
+    ]);
+  }
   catch (e: any) { error = e?.message ?? "нет связи с Control API"; }
   const items: any[] = data?.items ?? [];
 
@@ -17,6 +23,9 @@ export default async function AccountsPage() {
     <PageHeader eyebrow="Автоматизация" title="Аккаунты для актива"
       description="Подключённые user-аккаунты входят в закрытую группу и ставят выбранную реакцию на новые публикации." />
     {error && <ErrorBox message={error} />}
+    <Card title="Период реакций" description="Настройте, как часто подключённые аккаунты будут ставить лайки.">
+      <ActivityPeriodForm initialMinutes={settings.interval_minutes ?? 1} />
+    </Card>
     <Card title="Добавить аккаунт" description="Вход выполняется по номеру, коду Telegram и, если включён, паролю 2FA.">
       <ActivityLoginForm />
     </Card>
@@ -38,6 +47,6 @@ export default async function AccountsPage() {
             confirm={`Удалить аккаунт ${a.display_name} и его локальную сессию?`} doneLabel="удалён" />
         </div></Td>
       </tr>)}</tbody></table></div>}
-    <p className="helper-copy">Автоматическая проверка запускается с заданным в конфигурации интервалом. Для каждого аккаунта, группы и сообщения результат фиксируется отдельно, поэтому уже обработанные публикации повторно не отправляются.</p>
+    <p className="helper-copy">Сейчас каждый включённый аккаунт ставит не больше одной новой реакции раз в {settings.interval_minutes ?? 1} мин. Для каждой группы и сообщения результат фиксируется отдельно, поэтому уже обработанные публикации повторно не отправляются.</p>
   </div>;
 }

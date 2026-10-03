@@ -31,6 +31,8 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "GET", re: /^actions\/[\w-]+$/ },
   { method: "GET", re: /^events$/ },
   { method: "GET", re: /^activity-accounts$/ },
+  { method: "GET", re: /^activity-settings$/ },
+  { method: "PUT", re: /^activity-settings$/ },
   { method: "POST", re: /^activity-accounts\/login\/(start|complete)$/ },
   { method: "PATCH", re: /^activity-accounts\/[a-f0-9]+$/ },
   { method: "DELETE", re: /^activity-accounts\/[a-f0-9]+$/ },

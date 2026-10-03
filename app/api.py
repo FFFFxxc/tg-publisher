@@ -647,6 +647,17 @@ async def h_activity_accounts(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_activity_settings_get(request: web.Request) -> web.Response:
+    return jr(await _activity(request).settings())
+
+
+@handler
+async def h_activity_settings_put(request: web.Request) -> web.Response:
+    body = await body_json(request)
+    return jr(await _activity(request).update_settings(body.get("interval_minutes")))
+
+
+@handler
 async def h_activity_login_start(request: web.Request) -> web.Response:
     body = await body_json(request)
     result = await _activity(request).start_login(str(body.get("phone") or ""))
@@ -721,6 +732,8 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_get("/api/actions/{id}", h_action)
     r.add_get("/api/events", h_events)
     r.add_get("/api/activity-accounts", h_activity_accounts)
+    r.add_get("/api/activity-settings", h_activity_settings_get)
+    r.add_put("/api/activity-settings", h_activity_settings_put)
     r.add_post("/api/activity-accounts/login/start", h_activity_login_start)
     r.add_post("/api/activity-accounts/login/complete", h_activity_login_complete)
     r.add_patch("/api/activity-accounts/{id}", h_activity_account_patch)
