@@ -32,7 +32,7 @@ async def main(argv):
             from .settings import RuntimeSettings
             from .worker import Worker
             w = Worker(cfg, db, client, RuntimeSettings(db, cfg))
-            w.activity = ActivityAccounts(cfg, db)
+            w.activity = ActivityAccounts(cfg, db, approver=client)
             tasks = [w.run(), w.activity.run(), serve(cfg.health_port, w)]
             if cfg.control_api_token:
                 tasks.append(serve_api(cfg.control_api_port, ApiContext(w), cfg.control_api_token))

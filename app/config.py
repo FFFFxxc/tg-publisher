@@ -105,6 +105,8 @@ class Config:
     db_schema: str = "tg_publisher"
     session_path: str = "/home/app/.data/userbot"
     activity_reaction: str = "👍"
+    activity_reactions: list = field(default_factory=lambda: ["❤", "👍", "🔥", "😍", "😁"])
+    activity_target_invite: str = field(default="", repr=False)
     activity_interval: int = 30
     activity_recent_limit: int = 20
 
@@ -126,6 +128,9 @@ class Config:
             database_url=normalize_dsn(_env("DATABASE_URL", required=True)),
             session_path=_env("TG_SESSION_PATH", "/home/app/.data/userbot"),
             activity_reaction=_env("ACTIVITY_REACTION", "👍").strip() or "👍",
+            activity_reactions=[x.strip() for x in _env(
+                "ACTIVITY_REACTIONS", "❤,👍,🔥,😍,😁").split(",") if x.strip()],
+            activity_target_invite=_env("ACTIVITY_TARGET_INVITE").strip(),
             activity_interval=_int("ACTIVITY_INTERVAL_SEC", 30),
             activity_recent_limit=_int("ACTIVITY_RECENT_LIMIT", 20),
             collect_interval=_int("COLLECT_INTERVAL_SEC", 300),

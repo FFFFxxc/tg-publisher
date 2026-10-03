@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from aiohttp.test_utils import TestClient, TestServer
+from telethon import errors, functions, types
 
 from app.activity import ActivityAccounts, mask_phone, normalize_phone
 from app.api import ApiContext, build_app
@@ -85,10 +86,108 @@ class FakeClient:
 def cfg(path):
     return SimpleNamespace(session_path=str(Path(path) / "main"), api_id=1, api_hash="hash", proxy=None,
                            destination="@private", activity_recent_limit=20,
-                           activity_reaction="👍", activity_interval=30)
+                           activity_reaction="👍", activity_reactions=["❤", "👍", "🔥", "😍", "😁"],
+                           activity_target_invite="", activity_interval=30)
+
+
+class JoinClient(FakeClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.connected = True
+        self.authorized = True
+        self.member = False
+
+    async def get_entity(self, value):
+        if not self.member:
+            raise ValueError("unknown private peer")
+        return SimpleNamespace(id=1140244688)
+
+    async def get_dialogs(self): return []
+
+    async def __call__(self, request):
+        self.requests.append(request)
+        if isinstance(request, functions.messages.ImportChatInviteRequest):
+            raise errors.InviteRequestSentError(request=request)
+        return SimpleNamespace()
+
+
+class DirectJoinClient(JoinClient):
+    async def __call__(self, request):
+        self.requests.append(request)
+        if isinstance(request, functions.messages.ImportChatInviteRequest):
+            self.member = True
+            return SimpleNamespace(chats=[SimpleNamespace(id=1140244688)])
+        return SimpleNamespace()
+
+
+class ApproverClient(FakeClient):
+    def __init__(self, member_client):
+        super().__init__()
+        self.connected = True
+        self.authorized = True
+        self.member_client = member_client
+
+    async def get_entity(self, value): return SimpleNamespace(id=1140244688)
+
+    async def __call__(self, request):
+        self.requests.append(request)
+        if isinstance(request, functions.messages.GetChatInviteImportersRequest):
+            return SimpleNamespace(users=[types.User(id=42, access_hash=777, first_name="Иван")])
+        if isinstance(request, functions.messages.HideChatJoinRequestRequest):
+            self.member_client.member = True
+        return SimpleNamespace()
 
 
 class ActivityAccountTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_login_immediately_joins_private_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cfg(tmp); c.destination = "-1001140244688"
+            c.activity_target_invite = "https://t.me/+testInviteHash"
+            member = JoinClient(); approver = ApproverClient(member); db = FakeDB()
+            service = ActivityAccounts(c, db, lambda *a, **k: member, approver=approver)
+            started = await service.start_login("+79991234567")
+            result = await service.complete_login(started["login_token"], "12345")
+            self.assertTrue(result["authorized"])
+            self.assertTrue(member.member)
+            self.assertEqual(db.rows[0]["status"], "ready")
+
+    async def test_unknown_private_group_joins_by_invite_and_admin_approves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cfg(tmp); c.destination = "-1001140244688"
+            c.activity_target_invite = "https://t.me/+testInviteHash"
+            member = JoinClient()
+            approver = ApproverClient(member)
+            service = ActivityAccounts(c, FakeDB(), lambda *a, **k: member, approver=approver)
+            entity = await service._resolve_activity_target(member, 42)
+            self.assertEqual(entity.id, 1140244688)
+            self.assertTrue(any(isinstance(r, functions.messages.ImportChatInviteRequest)
+                                for r in member.requests))
+            approvals = [r for r in approver.requests
+                         if isinstance(r, functions.messages.HideChatJoinRequestRequest)]
+            self.assertEqual(len(approvals), 1)
+            self.assertTrue(approvals[0].approved)
+
+    async def test_direct_invite_join_needs_no_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cfg(tmp); c.destination = "-1001140244688"
+            c.activity_target_invite = "https://t.me/+testInviteHash"
+            member = DirectJoinClient()
+            service = ActivityAccounts(c, FakeDB(), lambda *a, **k: member)
+            entity = await service._resolve_activity_target(member, 42)
+            self.assertEqual(entity.id, 1140244688)
+
+    async def test_reactions_are_selected_from_positive_rotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = FakeDB(); service = ActivityAccounts(cfg(tmp), db, FakeClient)
+            started = await service.start_login("+79991234567")
+            account = await service.complete_login(started["login_token"], "12345")
+            await service.react_now(account["account_id"])
+            await service.react_now(account["account_id"])
+            reactions = [r.reaction[0].emoticon for r in service.clients[account["account_id"]].requests
+                         if isinstance(r, functions.messages.SendReactionRequest)]
+            self.assertEqual(len(reactions), 2)
+            self.assertNotEqual(reactions[0], reactions[1])
+            self.assertTrue(set(reactions).issubset({"❤", "👍", "🔥", "😍", "😁"}))
     def test_phone_normalization_and_mask(self):
         self.assertEqual(normalize_phone("+7 (999) 123-45-67"), "+79991234567")
         self.assertEqual(mask_phone("+79991234567"), "+79••••••567")

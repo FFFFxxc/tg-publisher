@@ -4,12 +4,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from telethon import TelegramClient, errors, functions, types
+from telethon import TelegramClient, errors, functions, types, utils
 
 from .logic import parse_ref
 
@@ -41,14 +42,16 @@ class PendingLogin:
 
 
 class ActivityAccounts:
-    def __init__(self, cfg, db, client_factory=TelegramClient):
+    def __init__(self, cfg, db, client_factory=TelegramClient, approver=None):
         self.cfg, self.db = cfg, db
         self.client_factory = client_factory
+        self.approver = approver
         self.base_dir = Path(cfg.session_path).parent / "activity-accounts"
         self.pending: dict[str, PendingLogin] = {}
         self.clients: dict[str, object] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._settings_changed = asyncio.Event()
+        self._last_reactions: dict[str, str] = {}
 
     def _new_client(self, session_path: str):
         return self.client_factory(
@@ -120,6 +123,13 @@ class ActivityAccounts:
             if previous_path and previous_path != session_path:
                 self._remove_session_files(previous_path)
         self.clients[saved_id] = pending.client
+        try:
+            await self._resolve_activity_target(pending.client, me.id)
+            await self.db.set_activity_account_status(saved_id, "ready")
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"[:500]
+            await self.db.set_activity_account_status(saved_id, "error", detail)
+            log.warning("activity account=%s initial join failed: %s", saved_id, detail)
         return {"authorized": True, "password_required": False, "account_id": saved_id,
                 "display_name": display_name}
 
@@ -194,7 +204,7 @@ class ActivityAccounts:
                 return 0
             row = current
             client = await self._client(row)
-            entity = await self._resolve(client, self.cfg.destination)
+            entity = await self._resolve_activity_target(client, row["telegram_user_id"])
             target_ref = str(getattr(entity, "id", self.cfg.destination))
             messages = await client.get_messages(entity, limit=self.cfg.activity_recent_limit)
             reacted = 0
@@ -203,9 +213,10 @@ class ActivityAccounts:
                     continue
                 if await self.db.activity_reacted(row["id"], target_ref, message.id):
                     continue
+                reaction = self._next_reaction(row["id"])
                 await client(functions.messages.SendReactionRequest(
                     peer=entity, msg_id=message.id,
-                    reaction=[types.ReactionEmoji(emoticon=self.cfg.activity_reaction)],
+                    reaction=[types.ReactionEmoji(emoticon=reaction)],
                     big=False, add_to_recent=False,
                 ))
                 await self.db.mark_activity_reacted(row["id"], target_ref, message.id)
@@ -214,6 +225,15 @@ class ActivityAccounts:
                     break
             await self.db.set_activity_account_status(row["id"], "ready")
             return reacted
+
+    def _next_reaction(self, account_id: str) -> str:
+        configured = list(dict.fromkeys(getattr(self.cfg, "activity_reactions", None) or
+                                        [self.cfg.activity_reaction]))
+        previous = self._last_reactions.get(account_id)
+        choices = [reaction for reaction in configured if reaction != previous] or configured
+        selected = secrets.choice(choices)
+        self._last_reactions[account_id] = selected
+        return selected
 
     async def _client(self, row: dict):
         client = self.clients.get(row["id"])
@@ -239,6 +259,55 @@ class ActivityAccounts:
         except ValueError:
             await client.get_dialogs()
             return await client.get_entity(value)
+
+    async def _resolve_activity_target(self, client, telegram_user_id: int):
+        try:
+            return await self._resolve(client, self.cfg.destination)
+        except ValueError:
+            invite = str(getattr(self.cfg, "activity_target_invite", "") or "").strip()
+            kind, invite_hash = parse_ref(invite) if invite else (None, None)
+            if kind != "invite":
+                raise ValueError("Аккаунт не состоит в закрытой группе, а ACTIVITY_TARGET_INVITE не задан")
+
+        request_sent = False
+        try:
+            await client(functions.messages.ImportChatInviteRequest(invite_hash))
+        except errors.InviteRequestSentError:
+            request_sent = True
+        except errors.UserAlreadyParticipantError:
+            pass
+        if request_sent:
+            await self._approve_join_request(telegram_user_id)
+
+        last_error = None
+        for _ in range(10):
+            try:
+                await client.get_dialogs()
+                return await self._resolve(client, self.cfg.destination)
+            except ValueError as exc:
+                last_error = exc
+                await asyncio.sleep(0.5)
+        raise ValueError("Заявка одобрена, но группа ещё не появилась в диалогах аккаунта") from last_error
+
+    async def _approve_join_request(self, telegram_user_id: int):
+        if self.approver is None:
+            raise RuntimeError("Основной аккаунт для одобрения заявки не подключён")
+        if not self.approver.is_connected():
+            await self.approver.connect()
+        peer = await self._resolve(self.approver, self.cfg.destination)
+        for _ in range(10):
+            pending = await self.approver(functions.messages.GetChatInviteImportersRequest(
+                peer=peer, offset_date=None, offset_user=types.InputUserEmpty(), limit=100,
+                requested=True,
+            ))
+            user = next((user for user in pending.users if user.id == telegram_user_id), None)
+            if user is not None:
+                await self.approver(functions.messages.HideChatJoinRequestRequest(
+                    peer=peer, user_id=utils.get_input_user(user), approved=True,
+                ))
+                return
+            await asyncio.sleep(0.5)
+        raise RuntimeError("Заявка аккаунта на вступление не найдена для одобрения")
 
     async def run(self):
         while True:
