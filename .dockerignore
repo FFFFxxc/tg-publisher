@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+*.pem
+id_*
+bridge_token*
+__pycache__/
+.data/
+.git
+tests/

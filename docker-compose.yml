@@ -1,0 +1,27 @@
+# Вариант для VK Cloud: SOCKS слушает 127.0.0.1:1080 на хосте -> host networking.
+# Postgres тоже на host network, но слушает только 127.0.0.1.
+services:
+  db:
+    image: postgres:16-alpine
+    network_mode: host
+    restart: unless-stopped
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    environment:
+      POSTGRES_USER: publisher
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: publisher
+    volumes: [pgdata:/var/lib/postgresql/data]
+  app:
+    build: .
+    network_mode: host        # без -p / ports: при host network
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://publisher:${POSTGRES_PASSWORD}@127.0.0.1:5432/publisher
+    stdin_open: true          # нужно только для разового `docker compose run --rm app login`
+    tty: true
+    depends_on: [db]
+    volumes: [appdata:/home/app/.data]
+volumes:
+  pgdata:
+  appdata:

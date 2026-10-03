@@ -1,0 +1,18 @@
+# Постоянный SSH dynamic SOCKS до узла с нормальным доступом к Telegram.
+# Установка: cp deploy/socks-tunnel.service /etc/systemd/system/ && systemctl enable --now socks-tunnel
+[Unit]
+Description=SSH SOCKS5 tunnel for Telegram (127.0.0.1:1080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tunnel
+Environment=AUTOSSH_GATETIME=0
+ExecStart=/usr/bin/autossh -M 0 -N -D 127.0.0.1:1080 \
+  -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=yes -i /home/tunnel/.ssh/id_ed25519 tunnel@EXIT_HOST
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
