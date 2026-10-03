@@ -4,11 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, INPUT } from "@/components/ui";
 
-type Item = { emoji?: string; emoji_id?: number | string | null; text: string; url?: string };
+type Item = { emoji?: string; emoji_id?: string | null; text: string; url?: string };
 
 export default function FooterEditor({ initial }: { initial: any }) {
   const [items, setItems] = useState<Item[]>(() =>
-    ((initial?.footer ?? []) as Item[]).map((x) => ({ ...x })),
+    ((initial?.footer ?? []) as Array<Omit<Item, "emoji_id"> & { emoji_id?: string | number | null }>).map((x) => ({
+      ...x,
+      emoji_id: x.emoji_id == null ? null : String(x.emoji_id),
+    })),
   );
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -39,7 +42,7 @@ export default function FooterEditor({ initial }: { initial: any }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `ошибка ${res.status}`);
-      setMsg("сохранено — футер применится к следующим публикациям");
+      setMsg("Подпись сохранена и появится в следующих публикациях.");
       router.refresh();
     } catch (e: any) {
       setErr(e?.message ?? "ошибка");
@@ -54,70 +57,59 @@ export default function FooterEditor({ initial }: { initial: any }) {
 
   return (
     <div className="space-y-4">
-      <Card title="Строки подписи (порядок = порядок в сообщении)">
+      <Card title="Строки подписи" description="Перетаскивание пока не требуется: меняйте порядок кнопками со стрелками. Каждая строка может быть ссылкой.">
         <div className="space-y-3">
           {items.map((it, i) => (
-            <div key={i} className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
-              <div className="flex flex-wrap items-center gap-2">
+            <div key={i} className="rounded-xl border border-slate-700/50 bg-slate-950/25 p-4">
+              <div className="mb-3 text-xs font-semibold text-slate-400">Строка {i + 1}</div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[100px_1fr_1fr_auto]">
+                <label className="field-label">Эмодзи
                 <input
                   value={it.emoji ?? ""}
                   onChange={(e) => update(i, { emoji: e.target.value })}
-                  placeholder="emoji"
-                  className={`w-20 ${INPUT}`}
+                  placeholder="👀"
+                  className={`w-full ${INPUT}`}
                 />
+                </label>
+                <label className="field-label">Текст
+                <input value={it.text} onChange={(e) => update(i, { text: e.target.value })} placeholder="Например: Больше контента" className={`w-full ${INPUT}`} />
+                </label>
+                <label className="field-label">Ссылка
+                <input value={it.url ?? ""} onChange={(e) => update(i, { url: e.target.value })} placeholder="https://…" className={`w-full ${INPUT}`} />
+                </label>
+                <div className="flex items-end gap-1">
+                  <button aria-label="Поднять строку" onClick={() => move(i, -1)} className="button-secondary">↑</button>
+                  <button aria-label="Опустить строку" onClick={() => move(i, 1)} className="button-secondary">↓</button>
+                  <button aria-label="Удалить строку" onClick={() => setItems(items.filter((_, j) => j !== i))} className="button-danger">✕</button>
+                </div>
+                <label className="field-label sm:col-span-2 xl:col-span-4">ID премиум-эмодзи <span className="field-help">Необязательно. Оставьте пустым для обычного эмодзи.</span>
                 <input
                   value={it.emoji_id ?? ""}
                   onChange={(e) =>
-                    update(i, { emoji_id: e.target.value === "" ? null : (e.target.value as any) })
+                    update(i, { emoji_id: e.target.value === "" ? null : e.target.value })
                   }
-                  placeholder="custom emoji id (premium)"
-                  className={`w-64 ${INPUT} font-mono text-xs`}
+                  placeholder="Полный числовой ID без сокращений"
+                  className={`${INPUT} w-full font-mono text-xs`}
                 />
-                <input
-                  value={it.text}
-                  onChange={(e) => update(i, { text: e.target.value })}
-                  placeholder="текст"
-                  className={`w-56 ${INPUT}`}
-                />
-                <input
-                  value={it.url ?? ""}
-                  onChange={(e) => update(i, { url: e.target.value })}
-                  placeholder="https://…"
-                  className={`w-64 ${INPUT}`}
-                />
-                <div className="flex gap-1">
-                  <button onClick={() => move(i, -1)} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs">
-                    ↑
-                  </button>
-                  <button onClick={() => move(i, 1)} className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs">
-                    ↓
-                  </button>
-                  <button
-                    onClick={() => setItems(items.filter((_, j) => j !== i))}
-                    className="rounded border border-red-800 bg-red-900/70 px-2 py-1 text-xs text-red-200"
-                  >
-                    ✕
-                  </button>
-                </div>
+                </label>
               </div>
             </div>
           ))}
           <button
             onClick={() => setItems([...items, { emoji: "", emoji_id: null, text: "", url: "" }])}
-            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs hover:bg-zinc-700"
+            className="button-secondary"
           >
-            + строка
+            + Добавить строку
           </button>
         </div>
       </Card>
 
-      <Card title="Предпросмотр (текст)">
-        <pre className="whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-900/60 p-3 text-sm text-zinc-200">
+      <Card title="Предпросмотр" description="Так текст будет выглядеть в конце сообщения. Ссылки в предпросмотре не открываются.">
+        <pre className="min-h-24 whitespace-pre-wrap rounded-xl border border-slate-700/50 bg-slate-950/50 p-4 text-sm leading-6 text-slate-200">
           {preview || "—"}
         </pre>
         <p className="mt-2 text-xs text-zinc-500">
-          UTF-16 offsets, premium custom emoji и защита от дубля футера считаются на воркере — существующая
-          логика build_caption/render_footer не менялась. Дубль подписи не появится у постов, где она уже есть.
+          Бот автоматически подготовит ссылки и премиум-эмодзи. Если подпись уже есть в исходном посте, второй раз она не добавится.
         </p>
       </Card>
 
@@ -125,9 +117,9 @@ export default function FooterEditor({ initial }: { initial: any }) {
         <button
           onClick={save}
           disabled={busy || items.length === 0}
-          className="rounded border border-sky-700 bg-sky-800 px-3 py-1.5 text-sm hover:bg-sky-700 disabled:opacity-50"
+          className="button-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? "сохранение…" : "Сохранить"}
+          {busy ? "Сохраняем…" : "Сохранить подпись"}
         </button>
         {msg && <span className="text-xs text-emerald-400">{msg}</span>}
         {err && <span className="text-xs text-red-400">{err}</span>}

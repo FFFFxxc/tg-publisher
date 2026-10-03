@@ -1,6 +1,7 @@
 "use client";
 
 import ActionButton from "@/components/ActionButton";
+import PostSchedule from "@/components/PostSchedule";
 
 const SENDABLE = ["candidate", "pending", "failed", "expired"];
 
@@ -19,24 +20,25 @@ export default function PostRowActions({ p }: { p: any }) {
           label="Опубликовать"
           variant="primary"
           confirm={`Публиковать пост ${p.id} сейчас?`}
-          doneLabel="готово"
+          doneLabel="опубликовано"
         />
       )}
       {canRetry && (
-        <ActionButton path={`posts/${p.id}/requeue`} label="Ретрай" doneLabel="в очереди" />
+        <ActionButton path={`posts/${p.id}/requeue`} label="Повторить" doneLabel="добавлено в очередь" />
       )}
       {canSkip && (
         <ActionButton
           path={`posts/${p.id}/skip`}
-          label="Скип"
+          label="Пропустить"
           variant="danger"
           confirm={`Пропустить пост ${p.id}?`}
-          doneLabel="skipped"
+          doneLabel="пост пропущен"
         />
       )}
       {canAi && (
-        <ActionButton path={`posts/${p.id}/ai`} body={{ force: true }} label="AI" doneLabel="AI готов" />
+        <ActionButton path={`posts/${p.id}/ai`} body={{ force: true }} label="Создать текст AI" doneLabel="текст AI готов" />
       )}
+      {canPublish && <PostSchedule p={p} />}
     </div>
   );
 }

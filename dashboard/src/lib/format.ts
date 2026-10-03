@@ -3,7 +3,7 @@ export function fmtDate(iso?: string | null): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso);
   return d.toLocaleString("ru-RU", {
-    timeZone: "UTC",
+    timeZone: "Europe/Moscow",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

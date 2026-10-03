@@ -1,5 +1,5 @@
 import { pubFetch } from "@/lib/api";
-import { Badge, Empty, ErrorBox, Td, Th } from "@/components/ui";
+import { Badge, Card, Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
 import AddSourceForm from "@/components/AddSourceForm";
 import SourceRowActions from "@/components/SourceRowActions";
 import { fmtDate } from "@/lib/format";
@@ -17,23 +17,23 @@ export default async function SourcesPage() {
   const items: any[] = data?.items ?? [];
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold text-zinc-100">Источники</h1>
+    <div className="space-y-5">
+      <PageHeader eyebrow="Контент" title="Источники" description="Каналы, из которых бот берёт материалы. Добавляйте, временно отключайте и проверяйте доступ." />
       {error && <ErrorBox message={error} />}
-      <AddSourceForm />
+      <Card title="Добавить канал" description="Бот сначала проверит доступ, а затем сохранит источник."><AddSourceForm /></Card>
 
       {items.length === 0 && !error ? (
         <Empty>источников пока нет — добавьте первый через форму выше</Empty>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-[#10131a]">
+        <div className="table-wrap">
           <table className="w-full">
             <thead>
               <tr>
                 <Th>ID</Th>
                 <Th>Канал</Th>
-                <Th>Title</Th>
-                <Th>Вкл</Th>
-                <Th>Cursor</Th>
+                <Th>Название</Th>
+                <Th>Состояние</Th>
+                <Th>Последнее сообщение</Th>
                 <Th>Последняя ошибка</Th>
                 <Th>Обновлён</Th>
                 <Th>Действия</Th>
@@ -46,7 +46,7 @@ export default async function SourcesPage() {
                   <Td className="font-mono text-xs">{s.ref}</Td>
                   <Td>{s.title ?? "—"}</Td>
                   <Td>
-                    <Badge v={s.enabled ? "published" : "skipped"}>{s.enabled ? "вкл" : "выкл"}</Badge>
+                    <Badge v={s.enabled ? "published" : "skipped"}>{s.enabled ? "Активен" : "Отключён"}</Badge>
                   </Td>
                   <Td>{s.last_message_id ?? "—"}</Td>
                   <Td className="max-w-[240px] text-xs text-red-400">{s.last_error ?? "—"}</Td>
@@ -60,9 +60,8 @@ export default async function SourcesPage() {
           </table>
         </div>
       )}
-      <p className="text-xs text-zinc-500">
-        Удаление доступно только без связанных постов (FK); иначе источник будет выключен. «Проверить» и
-        «Забрать N» выполняются воркером как persistent actions — результат появится в статусе кнопки.
+      <p className="helper-copy">
+        Если у источника уже есть сохранённые материалы, удаление безопасно отключит его. Проверка доступа и загрузка прошлых публикаций могут занять некоторое время — результат появится рядом с кнопкой.
       </p>
     </div>
   );

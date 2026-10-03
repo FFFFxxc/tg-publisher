@@ -292,7 +292,7 @@ class FakeWorker:
     async def _own_sid(self):
         return 7
 
-    async def _preview_image(self, msgs, files, tmp):
+    async def _preview_image(self, msgs, files, tmp, post_id=None):
         return None
 
     async def _ai(self, post, image, rt):

@@ -97,15 +97,94 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         body = await r.text()
         self.assertNotIn("sk-abcdef123456", body)
         data = json.loads(body)
+        self.assertTrue(data["api_key_configured"])
         self.assertTrue(data["api_key"]["configured"])
         self.assertTrue(data["api_key"]["mask"].endswith("3456"))
+        self.assertFalse(data["api_key_env_only"])
 
-    async def test_ai_key_not_settable_via_panel(self):
-        r = await self.client.put("/api/ai", json={"api_key": "new"}, headers=self._h())
-        self.assertEqual(r.status, 400)
-        r = await self.client.put("/api/ai", json={"ai_model": "new-model"}, headers=self._h())
+    async def test_ai_key_model_and_endpoint_are_settable_without_leaking_secret(self):
+        secret = "sk-new-secret-4321"
+        r = await self.client.put("/api/ai", json={
+            "api_key": secret,
+            "ai_enabled": True,
+            "ai_base_url": "https://new-ai.example/v1",
+            "ai_model": "new-model",
+        }, headers=self._h())
         self.assertEqual(r.status, 200)
+        body = await r.text()
+        self.assertNotIn(secret, body)
         self.assertEqual(await self.w.rt.get("ai_model"), "new-model")
+        runtime = await self.w.rt.view()
+        self.assertEqual(runtime.ai_api_key, secret)
+        self.assertTrue(runtime.ai_enabled)
+        self.assertEqual(runtime.ai_base_url, "https://new-ai.example/v1")
+        self.assertNotIn(secret, json.dumps(self.db.events))
+
+    async def test_provider_change_cannot_reuse_hidden_key(self):
+        r = await self.client.put("/api/ai", json={"ai_base_url": "https://other.example/v1"},
+                                  headers=self._h())
+        self.assertEqual(r.status, 400)
+        runtime = await self.w.rt.view()
+        self.assertEqual(runtime.ai_base_url, "https://ai.example/v1")
+        self.assertEqual(runtime.ai_api_key, self.cfg.ai_api_key)
+
+    async def test_ai_blank_key_keeps_current_and_explicit_clear_removes_it(self):
+        await self.client.put("/api/ai", json={"api_key": "sk-runtime-1234", "ai_model": "m1"},
+                              headers=self._h())
+        r = await self.client.put("/api/ai", json={"api_key": "  ", "ai_model": "m2"},
+                                  headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertEqual((await self.w.rt.view()).ai_api_key, "sk-runtime-1234")
+
+        r = await self.client.put("/api/ai", json={"clear_api_key": True}, headers=self._h())
+        self.assertEqual(r.status, 200)
+        data = await r.json()
+        self.assertFalse(data["api_key_configured"])
+        self.assertEqual((await self.w.rt.view()).ai_api_key, "")
+
+    async def test_ai_rejects_setting_and_clearing_key_together_without_echo(self):
+        secret = "sk-do-not-echo-1234"
+        r = await self.client.put("/api/ai", json={"api_key": secret, "clear_api_key": True},
+                                  headers=self._h())
+        self.assertEqual(r.status, 400)
+        self.assertNotIn(secret, await r.text())
+
+        oversized = "s" * 4097
+        r = await self.client.put("/api/ai", json={"api_key": oversized}, headers=self._h())
+        self.assertEqual(r.status, 400)
+        self.assertNotIn(oversized, await r.text())
+
+    async def test_settings_endpoint_never_contains_ai_secret(self):
+        secret = "sk-settings-secret-1234"
+        await self.client.put("/api/ai", json={"api_key": secret, "ai_model": "m"}, headers=self._h())
+        r = await self.client.get("/api/settings", headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertNotIn(secret, await r.text())
+
+    async def test_footer_emoji_ids_are_strings_in_settings_and_schedule(self):
+        expected = ["5256105385420412669", "5195160091547942599"]
+        r = await self.client.get("/api/settings", headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertEqual([x["emoji_id"] for x in (await r.json())["footer"]], expected)
+
+        r = await self.client.get("/api/schedule", headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertEqual([x["emoji_id"] for x in (await r.json())["settings"]["footer"]], expected)
+
+    async def test_footer_put_roundtrip_preserves_full_emoji_id(self):
+        exact = "5256105385420412669"
+        footer = [{"emoji": "👀", "emoji_id": exact, "text": "Тест", "url": "https://t.me/test"}]
+        r = await self.client.put("/api/settings", json={"footer": footer}, headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertEqual((await r.json())["footer"][0]["emoji_id"], exact)
+        self.assertEqual((await self.w.rt.get("footer"))[0]["emoji_id"], int(exact))
+
+    async def test_footer_put_rejects_js_unsafe_numeric_emoji_id(self):
+        rounded = 5256105385420413000
+        footer = [{"emoji": "👀", "emoji_id": rounded, "text": "Тест", "url": ""}]
+        r = await self.client.put("/api/settings", json={"footer": footer}, headers=self._h())
+        self.assertEqual(r.status, 400)
+        self.assertNotIn(str(rounded), await r.text())
 
     # ---------- schedule ----------
     async def test_schedule_roundtrip(self):

@@ -1,5 +1,5 @@
 import Overview from "@/components/Overview";
-import { ErrorBox } from "@/components/ui";
+import { ErrorBox, PageHeader } from "@/components/ui";
 import { pubFetch } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -13,8 +13,8 @@ export default async function HomePage() {
     error = e?.message ?? "нет связи с Control API";
   }
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold text-zinc-100">Обзор</h1>
+    <div>
+      <PageHeader eyebrow="Состояние системы" title="Главная" description="Всё важное о работе бота, ближайшей публикации и очереди — на одном экране." />
       {error ? <ErrorBox message={error} /> : <Overview initial={data} />}
     </div>
   );

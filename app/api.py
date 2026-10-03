@@ -9,8 +9,9 @@ import hmac
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from psycopg import errors as pg_errors
@@ -19,6 +20,7 @@ from . import __version__, events
 from .actions import BACKFILL_SIZES
 from .db import POST_STATUSES
 from .logic import next_slot, render_footer
+from .settings import footer_for_api, validate
 
 log = logging.getLogger("api")
 
@@ -34,7 +36,7 @@ def jr(data, status: int = 200) -> web.Response:
 
 
 def mask_key(key: str) -> dict:
-    """Секрет не возвращаем никогда: только configured + маска."""
+    """Секрет не возвращаем никогда: только статус и необратимая маска с хвостом."""
     if not key:
         return {"configured": False, "mask": ""}
     tail = key[-4:] if len(key) >= 12 else ""
@@ -77,6 +79,7 @@ def parse_posts_filters(qs) -> dict:
     f: dict = {}
     _one_of(qs, "status", POST_STATUSES, f)
     _one_of(qs, "kind", KINDS, f)
+    _one_of(qs, "media_type", {"photo", "video", "mixed", "text", "document", "unknown"}, f)
     _one_of(qs, "ai_status", AI_STATUSES, f)
     if qs.get("source_id"):
         try:
@@ -175,6 +178,7 @@ class ApiContext:
         self.db = worker.db
         self.cfg = worker.cfg
         self.settings = worker.rt
+        self.activity = getattr(worker, "activity", None)
 
 
 # ============================ handlers ============================
@@ -289,6 +293,25 @@ async def h_source_backfill(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_post_preview(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    pid = _path_id(request)
+    if pid <= 0:
+        raise ValueError('invalid post id')
+    row = await ctx.db.get_post(pid)
+    if row is None:
+        raise LookupError('post not found')
+    try:
+        image = await ctx.worker.previews.get(pid, source_ref=row['source_ref'], source_msg_ids=row['source_msg_ids'])
+    except Exception as exc:
+        log.warning('preview unavailable post=%s: %s', pid, type(exc).__name__)
+        return jr({'error': 'Превью временно недоступно'}, status=503)
+    if image is None:
+        return web.Response(status=204, headers={'Cache-Control': 'no-store'})
+    return web.FileResponse(image, headers={'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=300'})
+
+
+@handler
 async def h_posts(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     limit, offset = parse_paging(request.query)
@@ -333,6 +356,35 @@ async def h_post_skip(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_post_schedule(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    pid = _path_id(request)
+    if pid <= 0:
+        raise ValueError('invalid post id')
+    body = await body_json(request)
+    if set(body) != {'scheduled_at'}:
+        raise ValueError('Укажите scheduled_at или null для отмены')
+    at = body['scheduled_at']
+    if at is not None:
+        if not isinstance(at, str):
+            raise ValueError('Ожидается дата и время с часовым поясом')
+        try:
+            at = datetime.fromisoformat(at.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('Неверная дата публикации') from exc
+        if at.tzinfo is None or at <= datetime.now(timezone.utc):
+            raise ValueError('Выберите будущее время с часовым поясом')
+    if not await ctx.db.get_post(pid):
+        raise LookupError('Публикация не найдена')
+    if not await ctx.db.set_post_schedule(pid, at):
+        return jr({'error': 'Пост уже отправлен, обрабатывается или требует проверки'}, status=409)
+    await events.log_event(ctx.db, events.SETTINGS_UPDATED, post_id=pid,
+                           message='Время публикации изменено' if at else 'Личное время отменено',
+                           metadata={'scheduled_at': at.isoformat() if at else None})
+    return jr({'ok': True, 'scheduled_at': at})
+
+
+@handler
 async def h_post_ai(request: web.Request) -> web.Response:
     body = await body_json(request)
     return await _post_action(request, "generate_ai", {"force": bool(body.get("force"))})
@@ -366,7 +418,7 @@ async def h_schedule_put(request: web.Request) -> web.Response:
 async def h_settings_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     footer = await ctx.settings.get("footer")
-    return jr({"footer": footer, "preview": render_footer(footer)[0], "premium": ctx.cfg.premium})
+    return jr({"footer": footer_for_api(footer), "preview": render_footer(footer)[0], "premium": ctx.cfg.premium})
 
 
 @handler
@@ -377,16 +429,26 @@ async def h_settings_put(request: web.Request) -> web.Response:
         raise ValueError("footer обязателен")
     cleaned = await ctx.settings.update("footer", {"footer": body["footer"]})
     await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="footer", metadata={"keys": ["footer"]})
-    return jr({"ok": True, "footer": cleaned["footer"], "preview": render_footer(cleaned["footer"])[0]})
+    return jr({"ok": True, "footer": footer_for_api(cleaned["footer"]),
+               "preview": render_footer(cleaned["footer"])[0]})
 
 
 @handler
 async def h_ai_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     v = await ctx.settings.api_view()
+    primary = await ctx.settings.view(profile=1)
+    secondary = await ctx.settings.view(profile=2)
     data = {k: v[k] for k in ("ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout")}
-    data["api_key"] = mask_key(ctx.cfg.ai_api_key)
-    data["api_key_env_only"] = True
+    data["ai_secondary_base_url"] = v["ai_secondary_base_url"]
+    data["ai_secondary_model"] = v["ai_secondary_model"]
+    data["ai_active_profile"] = v["ai_active_profile"]
+    data["api_key"] = mask_key(primary.ai_api_key)
+    data["api_key_configured"] = bool(primary.ai_api_key)
+    data["api_key_env_only"] = False
+    data["secondary_api_key"] = mask_key(secondary.ai_api_key)
+    data["secondary_api_key_configured"] = bool(secondary.ai_api_key)
+    data["secondary_api_key_env_only"] = False
     return jr(data)
 
 
@@ -394,10 +456,58 @@ async def h_ai_get(request: web.Request) -> web.Response:
 async def h_ai_put(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
-    if "api_key" in body:
-        raise ValueError("API key задаётся только через ENV (AI_API_KEY) и не меняется через панель")
-    cleaned = await ctx.settings.update("ai", body)
-    await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai", metadata={"keys": sorted(cleaned)})
+    def take_key(public_name: str, clear_name: str, settings_name: str) -> tuple[str, bool]:
+        clear = body.pop(clear_name, False)
+        if not isinstance(clear, bool):
+            raise ValueError(f"{clear_name}: ожидается true/false")
+        supplied = body.pop(public_name, None)
+        if supplied is not None and not isinstance(supplied, str):
+            raise ValueError(f"{public_name}: ожидается строка до 4096 символов")
+        supplied = supplied.strip() if isinstance(supplied, str) else ""
+        if clear and supplied:
+            raise ValueError("нельзя одновременно задать и удалить API-ключ")
+        if clear:
+            body[settings_name] = ""
+        elif supplied:
+            body[settings_name] = supplied
+        return supplied, clear
+
+    api_key, clear_api_key = take_key("api_key", "clear_api_key", "ai_api_key")
+    secondary_key, clear_secondary_key = take_key(
+        "secondary_api_key", "clear_secondary_api_key", "ai_secondary_api_key")
+    cleaned = validate("ai", body) if body else {}
+
+    def origin(url):
+        parsed = urlsplit(url)
+        return (parsed.scheme.lower(), parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80))
+
+    primary = await ctx.settings.view(profile=1)
+    secondary = await ctx.settings.view(profile=2)
+    if "ai_base_url" in cleaned and not api_key and not clear_api_key:
+        if primary.ai_api_key and origin(cleaned["ai_base_url"]) != origin(primary.ai_base_url):
+            raise ValueError("Для смены сервиса нейросети введите новый API-ключ или удалите текущий")
+    if "ai_secondary_base_url" in cleaned and not secondary_key and not clear_secondary_key:
+        if (secondary.ai_api_key and
+                origin(cleaned["ai_secondary_base_url"]) != origin(secondary.ai_base_url)):
+            raise ValueError("Для смены резервного сервиса введите новый API-ключ или удалите текущий")
+
+    resulting_active = cleaned.get("ai_active_profile", primary.ai_active_profile)
+    if resulting_active == 2:
+        second_url = cleaned.get("ai_secondary_base_url", secondary.ai_base_url)
+        second_model = cleaned.get("ai_secondary_model", secondary.ai_model)
+        second_key = cleaned.get("ai_secondary_api_key", secondary.ai_api_key)
+        if not (second_url and second_model and second_key):
+            raise ValueError("Профиль 2 нужно полностью настроить: Base URL, модель и API-ключ")
+
+    if cleaned:
+        cleaned = await ctx.settings.update("ai", cleaned)
+        public_keys = []
+        for key in sorted(cleaned):
+            public_keys.append({"ai_api_key": "api_key",
+                                "ai_secondary_api_key": "secondary_api_key"}.get(key, key))
+        await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai",
+                               metadata={"keys": public_keys})
     return await h_ai_get(request)
 
 
@@ -405,7 +515,28 @@ async def h_ai_put(request: web.Request) -> web.Response:
 async def h_ai_test(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
-    aid = await ctx.db.create_action("test_ai_provider", {"text": str(body.get("text") or "")[:500]})
+    unknown = set(body) - {"profile", "text", "post_id"}
+    if unknown:
+        raise ValueError(f"неизвестный ключ {sorted(unknown)[0]!r}")
+    profile = body.get("profile")
+    if profile is None:
+        profile = (await ctx.settings.view()).ai_active_profile
+    if isinstance(profile, bool) or not isinstance(profile, int) or profile not in (1, 2):
+        raise ValueError("profile: ожидается 1 или 2")
+    text = body.get("text", "")
+    if not isinstance(text, str):
+        raise ValueError("text: ожидается строка")
+    text = text.strip()[:500]
+    post_id = body.get("post_id")
+    if post_id is not None and (isinstance(post_id, bool) or not isinstance(post_id, int) or post_id < 1):
+        raise ValueError("post_id: ожидается положительное целое")
+    runtime = await ctx.settings.view(profile=profile)
+    if not (runtime.ai_base_url and runtime.ai_model and runtime.ai_api_key):
+        raise ValueError(f"Профиль {profile} не настроен")
+    payload = {"profile": profile, "text": text}
+    if post_id is not None:
+        payload["post_id"] = post_id
+    aid = await ctx.db.create_action("test_ai_provider", payload, post_id=post_id)
     return jr({"action_id": aid, "status": "pending"}, status=202)
 
 
@@ -423,10 +554,35 @@ async def h_own(request: web.Request) -> web.Response:
     order = request.query.get("order", "reactions")
     if order not in ("reactions", "date"):
         raise ValueError("order: reactions | date")
-    items, total = await ctx.db.own_page(order, limit, offset)
+    media = request.query.get('media_type', '')
+    if media and media not in {"photo", "video", "mixed", "text", "document", "unknown"}:
+        raise ValueError('Неверный формат материала')
+    items, total = await ctx.db.own_page(order, limit, offset, media_type=media) if media else await ctx.db.own_page(order, limit, offset)
     for it in items:
         it["text"] = (it.get("text") or "")[:200]
     return jr({"items": items, "total": total, "limit": limit, "offset": offset})
+
+
+@handler
+async def h_own_preview(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    key = request.query.get('group_key', '').strip()
+    if not key or len(key) > 200:
+        raise ValueError('group_key обязателен')
+    row = await ctx.db.get_own(key)
+    if row is None:
+        raise LookupError('Материал архива не найден')
+    import hashlib
+    cache_key = 'own_' + hashlib.sha256(key.encode()).hexdigest()
+    try:
+        image = await ctx.worker.previews.get(cache_key, source_ref=ctx.cfg.destination,
+                                              source_msg_ids=row['msg_ids'])
+    except Exception as exc:
+        log.warning('own preview unavailable: %s', type(exc).__name__)
+        return jr({'error': 'Превью временно недоступно'}, status=503)
+    if image is None:
+        return web.Response(status=204, headers={'Cache-Control': 'no-store'})
+    return web.FileResponse(image, headers={'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=300'})
 
 
 @handler
@@ -436,7 +592,19 @@ async def h_own_repost(request: web.Request) -> web.Response:
     key = str(body.get("group_key") or "").strip()
     if not key or len(key) > 200:
         raise ValueError("group_key обязателен")
-    aid = await ctx.db.create_action("repost_own", {"group_key": key})
+    payload = {"group_key": key}
+    at = body.get('scheduled_at')
+    if at is not None:
+        if not isinstance(at, str):
+            raise ValueError('Ожидается дата и время с часовым поясом')
+        try:
+            date = datetime.fromisoformat(at.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('Неверная дата публикации') from exc
+        if date.tzinfo is None or date <= datetime.now(timezone.utc):
+            raise ValueError('Выберите будущее время с часовым поясом')
+        payload['scheduled_at'] = date.isoformat()
+    aid = await ctx.db.create_action("repost_own", payload)
     return jr({"action_id": aid, "status": "pending"}, status=202)
 
 
@@ -466,6 +634,59 @@ async def h_events(request: web.Request) -> web.Response:
     return jr({"items": items, "total": total, "limit": limit, "offset": offset})
 
 
+def _activity(request: web.Request):
+    service = request.app["ctx"].activity
+    if service is None:
+        raise RuntimeError("Сервис аккаунтов не запущен")
+    return service
+
+
+@handler
+async def h_activity_accounts(request: web.Request) -> web.Response:
+    return jr({"items": await _activity(request).list()})
+
+
+@handler
+async def h_activity_login_start(request: web.Request) -> web.Response:
+    body = await body_json(request)
+    result = await _activity(request).start_login(str(body.get("phone") or ""))
+    return jr(result, status=202)
+
+
+@handler
+async def h_activity_login_complete(request: web.Request) -> web.Response:
+    body = await body_json(request)
+    result = await _activity(request).complete_login(
+        str(body.get("login_token") or ""), str(body.get("code") or ""),
+        str(body.get("password") or ""),
+    )
+    return jr(result, status=200 if result.get("authorized") else 202)
+
+
+@handler
+async def h_activity_account_patch(request: web.Request) -> web.Response:
+    body = await body_json(request)
+    if not isinstance(body.get("enabled"), bool):
+        raise ValueError("enabled должен быть boolean")
+    await _activity(request).set_enabled(request.match_info["id"], body["enabled"])
+    return jr({"ok": True})
+
+
+@handler
+async def h_activity_account_delete(request: web.Request) -> web.Response:
+    await _activity(request).delete(request.match_info["id"])
+    return jr({"ok": True})
+
+
+@handler
+async def h_activity_react(request: web.Request) -> web.Response:
+    result = await _activity(request).react_now(request.match_info["id"])
+    failed = next((item for item in result["items"] if item["status"] == "error"), None)
+    if failed:
+        return jr({**result, "error": failed["error"]}, status=409)
+    return jr(result)
+
+
 def build_app(ctx: ApiContext, token: str) -> web.Application:
     app = web.Application(middlewares=[auth_mw], client_max_size=MAX_BODY)
     app["ctx"], app["token"] = ctx, token
@@ -479,10 +700,12 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/sources/{id}/backfill", h_source_backfill)
     r.add_get("/api/posts", h_posts)
     r.add_get("/api/posts/{id}", h_post)
+    r.add_get("/api/posts/{id}/preview", h_post_preview)
     r.add_post("/api/posts/{id}/publish", h_post_publish)
     r.add_post("/api/posts/{id}/requeue", h_post_requeue)
     r.add_post("/api/posts/{id}/skip", h_post_skip)
     r.add_post("/api/posts/{id}/ai", h_post_ai)
+    r.add_put("/api/posts/{id}/schedule", h_post_schedule)
     r.add_get("/api/schedule", h_schedule_get)
     r.add_put("/api/schedule", h_schedule_put)
     r.add_get("/api/settings", h_settings_get)
@@ -492,10 +715,17 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/ai/test", h_ai_test)
     r.add_post("/api/own/scan", h_own_scan)
     r.add_get("/api/own", h_own)
+    r.add_get("/api/own/preview", h_own_preview)
     r.add_post("/api/own/repost", h_own_repost)
     r.add_get("/api/actions", h_actions)
     r.add_get("/api/actions/{id}", h_action)
     r.add_get("/api/events", h_events)
+    r.add_get("/api/activity-accounts", h_activity_accounts)
+    r.add_post("/api/activity-accounts/login/start", h_activity_login_start)
+    r.add_post("/api/activity-accounts/login/complete", h_activity_login_complete)
+    r.add_patch("/api/activity-accounts/{id}", h_activity_account_patch)
+    r.add_delete("/api/activity-accounts/{id}", h_activity_account_delete)
+    r.add_post("/api/activity-accounts/{id}/react", h_activity_react)
     return app
 
 

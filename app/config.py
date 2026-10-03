@@ -95,6 +95,7 @@ class Config:
     ai_required: bool = False
     ai_base_url: str = ""
     ai_api_key: str = field(default="", repr=False)
+    ai_api_key_file: str = "/home/app/.data/ai_api_key"
     ai_model: str = ""
     ai_timeout: int = 40
     ai_prompt: str = ""
@@ -103,6 +104,9 @@ class Config:
     control_api_token: str = field(default="", repr=False)
     db_schema: str = "tg_publisher"
     session_path: str = "/home/app/.data/userbot"
+    activity_reaction: str = "👍"
+    activity_interval: int = 30
+    activity_recent_limit: int = 20
 
     def __repr__(self) -> str:  # никаких секретов в логах
         return (f"Config(dest={self.destination!r}, sources={self.sources!r}, "
@@ -121,6 +125,9 @@ class Config:
             proxy=build_proxy(_env("TG_PROXY_HOST").strip(), _int("TG_PROXY_PORT", 1080)),
             database_url=normalize_dsn(_env("DATABASE_URL", required=True)),
             session_path=_env("TG_SESSION_PATH", "/home/app/.data/userbot"),
+            activity_reaction=_env("ACTIVITY_REACTION", "👍").strip() or "👍",
+            activity_interval=_int("ACTIVITY_INTERVAL_SEC", 30),
+            activity_recent_limit=_int("ACTIVITY_RECENT_LIMIT", 20),
             collect_interval=_int("COLLECT_INTERVAL_SEC", 300),
             publish_interval=_int("PUBLISH_INTERVAL_SEC", 1800),
             publish_window=_env("PUBLISH_WINDOW"),
@@ -145,6 +152,7 @@ class Config:
             ai_required=_bool("AI_REQUIRED"),
             ai_base_url=_env("AI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
             ai_api_key=_env("AI_API_KEY"),
+            ai_api_key_file=_env("AI_API_KEY_FILE", "/home/app/.data/ai_api_key"),
             ai_model=_env("AI_MODEL", "gpt-4o-mini"),
             ai_timeout=_int("AI_TIMEOUT_SEC", 40),
             ai_prompt=_env("AI_PROMPT", "Перепиши подпись к посту для Telegram-канала: коротко и живо. "

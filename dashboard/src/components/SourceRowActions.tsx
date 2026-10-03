@@ -18,8 +18,8 @@ export default function SourceRowActions({ s }: { s: any }) {
       <ActionButton
         path={`sources/${s.id}/backfill`}
         body={{ n }}
-        label={`Забрать ${n}`}
-        doneLabel="backfill готов"
+        label={`Загрузить прошлые (${n})`}
+        doneLabel="прошлые публикации загружены"
       />
       <select
         value={n}

@@ -2,6 +2,7 @@
 exported senders и скачивания после FileMigrateError в другой DC."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telethon import TelegramClient
@@ -10,6 +11,11 @@ from telethon.sessions import StringSession
 from .config import Config
 
 log = logging.getLogger("tg")
+
+# Один Telethon client используется несколькими worker-loop. Без lock несколько
+# coroutine могут одновременно вызвать client.connect() после старта/обрыва и
+# зависнуть внутри Telethon. Сериализуем reconnect и повторно проверяем состояние.
+_connect_lock = asyncio.Lock()
 
 
 class SessionError(RuntimeError):
@@ -39,14 +45,25 @@ def verify_client_proxy(client, expected: dict | None):
 async def ensure_connected(client: TelegramClient):
     if client.is_connected():
         return
-    log.info("telegram connecting")
-    await client.connect()
-    if not await client.is_user_authorized():
-        await client.disconnect()
-        raise SessionError("userbot is not logged in (or session revoked). "
-                           "Run once: docker compose run --rm app login")
-    me = await client.get_me()
-    log.info("telegram authorized as id=%s", me.id)
+    async with _connect_lock:
+        # Пока ждали lock, другой loop мог уже восстановить соединение.
+        if client.is_connected():
+            return
+        log.info("telegram connecting")
+        try:
+            await asyncio.wait_for(client.connect(), timeout=45)
+            if not await asyncio.wait_for(client.is_user_authorized(), timeout=30):
+                await client.disconnect()
+                raise SessionError("userbot is not logged in (or session revoked). "
+                                   "Run once: docker compose run --rm app login")
+            me = await asyncio.wait_for(client.get_me(), timeout=30)
+            log.info("telegram authorized as id=%s", me.id)
+        except asyncio.TimeoutError:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise ConnectionError("telegram connect timed out")
 
 
 _cache: dict[str, object] = {}

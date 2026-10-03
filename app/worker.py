@@ -6,32 +6,40 @@ import logging
 import shutil
 import tempfile
 import time
+from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from zoneinfo import ZoneInfo
 
-from telethon import errors
-from telethon.tl.types import (MessageEntityCustomEmoji, MessageEntityTextUrl,
+from telethon import errors, functions
+from telethon.tl.types import (Document, MessageEntityCustomEmoji, MessageEntityTextUrl,
                                MessageMediaDocument, MessageMediaPhoto)
 
 from . import __version__, events
 from .actions import STALE_ACTION_SEC, dispatch
-from .ai import AIError, generate_caption
+from .ai import AIError, generate_caption, validate_caption
 from .config import Config
+from .content import filter_source_content, is_advertisement
 from .db import DB
 from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UNCHECKED, AMBIGUOUS, FAILED,
                     OLD, PARSED, SKIPPED, backoff_seconds, build_caption, due_slot, group_messages, in_window)
+from .logic import parse_ref
 from .settings import RuntimeSettings
+from .media import album_kind, media_batches, prepare_media, media_type
+from .preview import PreviewCache
 from .tg import ensure_connected, resolve
 
 log = logging.getLogger("worker")
 
 UNCERTAIN = (ConnectionError, asyncio.TimeoutError, TimeoutError, OSError)
+# Verified Telegram peer of «2D WEBM | аниме мемы». Titles are not proof of identity.
+LINK_ALLOWED_CHANNEL_ID = 1140244688
 
 
 def msg_stats(msgs) -> dict:
     """Метрики поста (альбом = сумма реакций, максимум просмотров)."""
-    st = {"views": 0, "reactions": 0, "forwards": 0, "replies": 0}
+    st = {"views": 0, "reactions": 0, "forwards": 0, "replies": 0, "media_type": media_type(msgs)}
     for m in msgs:
         st["views"] = max(st["views"], m.views or 0)
         st["forwards"] = max(st["forwards"], m.forwards or 0)
@@ -62,6 +70,7 @@ class Worker:
         self.heartbeat: dict[str, float] = {}
         self.dest = None
         self.own_sid = None
+        self.previews = PreviewCache(client, Path(cfg.session_path).parent / 'previews')
 
     async def _dest(self):
         if self.dest is None:
@@ -90,6 +99,10 @@ class Worker:
                 await events.log_event(self.db, events.SOURCE_ERROR, level="warning", source_id=src["id"],
                                        message=f"{src['ref']}: {type(e).__name__}: {e}")
         await self.refresh_stats(rt.max_post_age_hours)
+        await self.refresh_media_types()
+        if await self.db.kv_get('media_index_version') != '1':
+            await self.scan_own(force=True, rt=rt)
+            await self.db.kv_set('media_index_version', '1')
         await self.db.kv_set("last_collect_at", time.time())
 
     async def _collect_source(self, src, settle, rt):
@@ -150,11 +163,34 @@ class Worker:
         if rows:
             log.info("stats refreshed for %d candidates", len(rows))
 
+    async def refresh_media_types(self):
+        rows = await self.db.unclassified_posts()
+        by_src = defaultdict(list)
+        for row in rows:
+            by_src[row['ref']].append(row)
+        for ref, posts in by_src.items():
+            try:
+                entity = await resolve(self.client, ref)
+                ids = list(dict.fromkeys(mid for p in posts for mid in p['source_msg_ids']))
+                got = {}
+                for i in range(0, len(ids), 100):
+                    for msg in await self.client.get_messages(entity, ids=ids[i:i+100]):
+                        if msg:
+                            got[msg.id] = msg
+                for post in posts:
+                    msgs = [got[mid] for mid in post['source_msg_ids'] if mid in got]
+                    if msgs:
+                        await self.db.set_media_type(post['id'], media_type(msgs))
+            except UNCERTAIN:
+                raise
+            except Exception as exc:
+                log.warning('media classification source=%s failed: %s', ref, exc)
+
     # ================= снимок своего канала =================
     async def scan_own(self, force=False, rt=None):
         rt = rt or await self.rt.view()
         last = float(await self.db.kv_get("own_scan_at", "0"))
-        if not force and time.time() - last < rt.own_scan_hours * 3600:
+        if not force and time.time() - last < self.cfg.own_scan_hours * 3600:
             return
         log.info("own channel scan start (limit %d)", self.cfg.own_scan_limit)
         dest = await self._dest()
@@ -167,12 +203,21 @@ class Worker:
                 continue
             st = msg_stats(group)
             text = next((m.message for m in group if m.message), "")
-            await self.db.upsert_own(key, ids, group[0].date, text, st["reactions"], st["views"], st["forwards"])
+            await self.db.upsert_own(key, ids, group[0].date, text, st["reactions"], st["views"], st["forwards"], st['media_type'])
             n += 1
         await self.db.kv_set("own_scan_at", time.time())
         log.info("own channel scan done: %d posts", n)
 
     # ================= расписание =================
+    async def scheduled_tick(self):
+        rt = await self.rt.view()
+        if rt.publishing_paused:
+            return
+        post = await self.db.claim_scheduled()
+        if post:
+            log.info('personal schedule due post=%s', post.id)
+            await self._run(post)
+
     async def publish_tick(self):
         rt = await self.rt.view()
         if rt.publishing_paused:
@@ -228,20 +273,47 @@ class Worker:
             shutil.rmtree(tmp, ignore_errors=True)
 
     # ================= AI (только для спаршенных) =================
-    async def _ai(self, post, image: str | None, rt):
+    @staticmethod
+    def _source_links_allowed(post, source_entity=None):
+        if source_entity is not None:
+            return getattr(source_entity, 'id', None) == LINK_ALLOWED_CHANNEL_ID
+        kind, value = parse_ref(post.source_ref)
+        return kind == 'id' and value in (LINK_ALLOWED_CHANNEL_ID, -1000000000000 - LINK_ALLOWED_CHANNEL_ID)
+
+    async def _ai(self, post, image: str | None, rt, source_entity=None, source_entities=None):
         if post.kind != PARSED or not rt.ai_enabled:
             return None
+        allow_links = self._source_links_allowed(post, source_entity)
+
+        def caption_text(text):
+            text = validate_caption(text)
+            if not allow_links:
+                text = filter_source_content(text)[0]
+            return validate_caption(text)
+
         if post.ai_status == AI_GENERATED:
-            return post.ai_caption
+            try:
+                return caption_text(post.ai_caption)
+            except AIError as e:
+                await self.db.set_ai(post.id, AI_FAILED, None, str(e))
+                if rt.ai_required:
+                    raise
+                return None
         if post.ai_status != AI_UNCHECKED:
+            if rt.ai_required:
+                raise AIError(f"required AI caption is unavailable (status={post.ai_status})")
             return None
+        if not allow_links:
+            post = replace(post, text=filter_source_content(post.text, source_entities)[0])
         if not post.text.strip() and not image:
             await self.db.set_ai(post.id, AI_NO_PREVIEW)
+            if rt.ai_required:
+                raise AIError("required AI caption has no text or preview")
             return None
         await self.db.set_ai(post.id, AI_PROCESSING)
         log.info("ai start post=%s", post.id)
         try:
-            cap = await asyncio.wait_for(generate_caption(rt, post.text, image), rt.ai_timeout + 15)
+            cap = caption_text(await asyncio.wait_for(generate_caption(rt, post.text, image), rt.ai_timeout + 15))
             await self.db.set_ai(post.id, AI_GENERATED, cap)
             log.info("ai done post=%s", post.id)
             await events.log_event(self.db, events.AI_GENERATED, post_id=post.id, message=(cap or "")[:200],
@@ -256,18 +328,20 @@ class Worker:
                 raise
             return None
 
-    async def _preview_image(self, msgs, files, tmp):
-        """Картинка для AI: фото из поста, иначе превью видео."""
-        for p in files:
-            if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                return p
-        for m in msgs:
-            if m.document and getattr(m.document, "thumbs", None):
-                try:
-                    return await self.client.download_media(m, file=f"{tmp}/thumb_{m.id}.jpg", thumb=-1)
-                except Exception as e:
-                    log.warning("thumb download failed msg=%s: %s", m.id, e)
-        return None
+    async def _preview_image(self, msgs, files, tmp, post_id=None):
+        cache = self.previews if post_id is not None else PreviewCache(self.client, tmp)
+        return await cache.get(post_id if post_id is not None else 'temporary', msgs=msgs, downloaded_files=files)
+
+    async def _valid_custom_emojis(self, entities):
+        ids = list({e.document_id for e in entities if isinstance(e, MessageEntityCustomEmoji)})
+        if not ids:
+            return entities
+        docs = await self.client(functions.messages.GetCustomEmojiDocumentsRequest(ids))
+        valid = {d.id for d in docs if isinstance(d, Document)}
+        if len(valid) != len(ids):
+            log.warning("invalid custom emoji IDs %s: using ordinary emoji", sorted(set(ids) - valid))
+        # Keep Unicode text and links; invalid IDs must not reject the whole album.
+        return [e for e in entities if not isinstance(e, MessageEntityCustomEmoji) or e.document_id in valid]
 
     # ================= публикация =================
     async def _publish(self, post, tmp, rt):
@@ -277,7 +351,16 @@ class Worker:
             if not msgs:
                 await self.db.mark(post.id, SKIPPED, "source messages deleted")
                 return log.info("skip post=%s: source deleted", post.id)
-            files = []
+            src_msg = next((m for m in msgs if m.message), None)
+            source_body = src_msg.message if src_msg else ''
+            source_entities = src_msg.entities if src_msg else None
+            allow_links = self._source_links_allowed(post, entity)
+            if not allow_links:
+                if is_advertisement(source_body) or is_advertisement(post.text):
+                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
+                    return log.info('skip post=%s: foreign advertisement', post.id)
+                source_body, source_entities = filter_source_content(source_body, source_entities)
+            files, file_msgs = [], []
             for m in msgs:
                 if not isinstance(m.media, (MessageMediaPhoto, MessageMediaDocument)):
                     continue
@@ -287,28 +370,38 @@ class Worker:
                     continue
                 log.info("download start post=%s msg=%s dc=%s", post.id, m.id, _dc(m))
                 t = time.monotonic()
-                path = await self.client.download_media(m, file=tmp + "/")
+                media_dir = Path(tmp) / str(m.id)
+                media_dir.mkdir(exist_ok=True)
+                path = await self.client.download_media(m, file=str(media_dir) + "/")
                 if not path:
                     raise RuntimeError(f"download returned nothing for msg {m.id}")
                 files.append(path)
+                file_msgs.append(m)
                 log.info("download done post=%s msg=%s %.1fs", post.id, m.id, time.monotonic() - t)
-            if not files and not post.text.strip():
+            if not files and not source_body.strip():
                 await self.db.mark(post.id, SKIPPED, "nothing to publish")
                 return
-            image = await self._preview_image(msgs, files, tmp) if post.kind == PARSED and rt.ai_enabled else None
+            image = await self._preview_image(msgs, files, tmp, post.id) if post.kind == PARSED and rt.ai_enabled else None
             try:
-                ai_text = await self._ai(post, image, rt)
+                ai_text = await self._ai(replace(post, text=source_body), image, rt, entity, source_entities)
             except (AIError, asyncio.TimeoutError) as e:
                 await self.db.mark(post.id, FAILED, f"AI_REQUIRED: {e}")
                 await events.log_event(self.db, events.PUBLISH_FAILED, level="error", post_id=post.id,
                                        message=f"AI_REQUIRED: {e}")
                 return
-            src_msg = next((m for m in msgs if m.message), None)
-            body = ai_text or (src_msg.message if src_msg else "")
-            body_ents = None if ai_text else (src_msg.entities if src_msg else None)
+            body = ai_text or source_body
+            body_ents = None if ai_text else source_entities
+            if not allow_links:
+                if is_advertisement(body):
+                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
+                    return
+                body, body_ents = filter_source_content(body, body_ents)
             caption, kept, fspecs = build_caption(body, body_ents, rt.footer, bool(files), self.cfg.premium)
-            entities = (kept or []) + to_entities(fspecs)
+            entities = await self._valid_custom_emojis((kept or []) + to_entities(fspecs))
             dest = await self._dest()
+            # Upload before marking send_started; these RPCs do not publish a post.
+            prepared = [(await prepare_media(self.client, m, path), album_kind(m))
+                        for m, path in zip(file_msgs, files)]
         except errors.FloodWaitError as e:
             await self.db.retry_later(post.id, e.seconds + 5, f"FloodWait {e.seconds}s before send")
             return log.warning("post=%s flood wait %ss (pre-send), requeued", post.id, e.seconds)
@@ -319,17 +412,29 @@ class Worker:
         log.info("publish start post=%s kind=%s files=%d", post.id, post.kind, len(files))
         await events.log_event(self.db, events.PUBLISH_STARTED, post_id=post.id,
                                message=f"kind={post.kind} files={len(files)}")
+        ids = []
         try:
             if files:
-                sent = await self.client.send_file(dest, files if len(files) > 1 else files[0], caption=caption,
-                                                   formatting_entities=entities, parse_mode=None)
+                for batch in media_batches(prepared):
+                    sent = await self.client.send_file(
+                        dest, batch if len(batch) > 1 else batch[0],
+                        caption=caption if not ids else "",
+                        formatting_entities=entities if not ids else [], parse_mode=None)
+                    ids.extend(s.id for s in (sent if isinstance(sent, list) else [sent]))
+                    # A crash/next-batch failure must never retry already published media.
+                    await self.db.record_sent(post.id, ids)
             else:
                 sent = await self.client.send_message(dest, caption, formatting_entities=entities,
                                                       parse_mode=None, link_preview=False)
+                ids = [sent.id]
         except errors.FloodWaitError as e:
+            if ids:
+                return await self._partial_send_failure(post, ids, e)
             await self.db.retry_later(post.id, e.seconds + 5, f"FloodWait {e.seconds}s on send")
             return log.warning("post=%s flood wait on send, requeued", post.id)
         except errors.RPCError as e:
+            if ids:
+                return await self._partial_send_failure(post, ids, e)
             return await self._pre_send_failure(post, e, rt)
         except UNCERTAIN as e:
             await self.db.mark(post.id, AMBIGUOUS, f"network error during send: {type(e).__name__}")
@@ -337,7 +442,10 @@ class Worker:
             await events.log_event(self.db, events.PUBLISH_AMBIGUOUS, level="error", post_id=post.id,
                                    message=f"{type(e).__name__} during send, check channel then requeue")
             raise
-        ids = [s.id for s in (sent if isinstance(sent, list) else [sent])]
+        except Exception as e:
+            # Includes persistence failures after a confirmed send. Do not send the next batch.
+            await self._partial_send_failure(post, ids, e)
+            raise
         log.info("publish done post=%s dest_ids=%s", post.id, ids)
         for i in range(5):
             try:
@@ -348,6 +456,13 @@ class Worker:
             except Exception as e:
                 log.error("post=%s persist dest_ids failed (try %d): %s", post.id, i + 1, e)
                 await asyncio.sleep(2 ** i)
+
+    async def _partial_send_failure(self, post, ids, e):
+        err = f"partial send dest_ids={ids}: {type(e).__name__}: {e}"
+        await self.db.mark(post.id, AMBIGUOUS, err)
+        log.error("post=%s AMBIGUOUS: %s", post.id, err)
+        await events.log_event(self.db, events.PUBLISH_AMBIGUOUS, level="error", post_id=post.id,
+                               message=err, metadata={"dest_msg_ids": ids})
 
     async def _pre_send_failure(self, post, e, rt):
         err = f"{type(e).__name__}: {e}"
@@ -429,10 +544,11 @@ class Worker:
         await self.db.fail_stale_actions(0, "interrupted by worker restart")
         await events.log_event(self.db, events.WORKER_STARTED, message=f"v{__version__}")
         pub_every = 30 if self.cfg.publish_times else self.cfg.publish_interval
-        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5}
+        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5}
         await asyncio.gather(self.loop("collect", self._collect_interval, self.collect_once),
                              self.loop("publish", pub_every, self.publish_tick),
                              self.loop("actions", 5, self.actions_tick),
+                             self.loop("scheduled", 5, self.scheduled_tick),
                              self.watchdog(limits))
 
 

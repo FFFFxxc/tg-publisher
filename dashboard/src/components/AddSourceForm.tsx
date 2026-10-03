@@ -7,24 +7,26 @@ import { INPUT } from "@/components/ui";
 export default function AddSourceForm() {
   const [ref, setRef] = useState("");
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="grid gap-3 sm:grid-cols-[minmax(260px,1fr)_auto]">
+      <label className="field-label">Ссылка или имя канала
       <input
         value={ref}
         onChange={(e) => setRef(e.target.value)}
-        placeholder="@username / t.me/name / -100ID / t.me/+hash"
-        className={`w-96 ${INPUT}`}
+        placeholder="@channel или https://t.me/channel"
+        className={`w-full ${INPUT}`}
       />
+      </label>
+      <div className="flex items-end">
       <ActionButton
         path="sources"
         method="POST"
         body={{ ref }}
-        label="Добавить"
+        label="Добавить источник"
         variant="primary"
         doneLabel="источник добавлен"
       />
-      <span className="text-xs text-zinc-500">
-        воркер проверит доступ через Telethon (resolve + title) и только потом сохранит; дубль не добавится
-      </span>
+      </div>
+      <span className="field-help sm:col-span-2">Поддерживаются публичные и закрытые каналы, ссылка-приглашение и числовой ID. Повторный источник не добавится.</span>
     </div>
   );
 }

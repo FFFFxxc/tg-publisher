@@ -10,3 +10,5 @@ __pycache__/
 .data/
 .git
 tests/
+.fix-evidence/
+.fix-venv/

@@ -15,6 +15,8 @@ log = logging.getLogger("settings")
 
 PREFIX = "rt:"
 CACHE_TTL_SEC = 10
+JS_SAFE_INTEGER = 2 ** 53 - 1
+INT64_MAX = 2 ** 63 - 1
 
 
 def _v_int(lo: int, hi: int):
@@ -55,9 +57,37 @@ def _v_str(maxlen: int):
     return v
 
 
+def _v_api_key(raw):
+    """API credential override. Empty is meaningful: it disables the ENV fallback."""
+    if not isinstance(raw, str):
+        raise ValueError("ожидается строка до 4096 символов")
+    value = raw.strip()
+    if len(value) > 4096:
+        raise ValueError("ожидается строка до 4096 символов")
+    return value
+
+
 def _v_url(raw):
     s = _v_str(200)(raw)
     if not s.startswith(("http://", "https://")):
+        raise ValueError("ожидается http(s) URL")
+    return s.rstrip("/")
+
+
+def _v_optional_str(maxlen: int):
+    def v(raw):
+        if not isinstance(raw, str):
+            raise ValueError(f"ожидается строка до {maxlen} символов")
+        s = raw.strip()
+        if len(s) > maxlen:
+            raise ValueError(f"ожидается строка до {maxlen} символов")
+        return s
+    return v
+
+
+def _v_optional_url(raw):
+    s = _v_optional_str(200)(raw)
+    if s and not s.startswith(("http://", "https://")):
         raise ValueError("ожидается http(s) URL")
     return s.rstrip("/")
 
@@ -89,6 +119,23 @@ def _v_pattern(raw):
 def _v_footer(raw):
     if not isinstance(raw, list) or not raw:
         raise ValueError("footer должен быть непустым списком строк")
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("footer: каждый элемент должен быть объектом")
+        emoji_id = item.get("emoji_id")
+        if emoji_id is None or emoji_id == "":
+            continue
+        if isinstance(emoji_id, bool) or isinstance(emoji_id, float):
+            raise ValueError("footer: emoji_id должен быть целым числом в строке")
+        if isinstance(emoji_id, int):
+            if emoji_id < 1 or emoji_id > JS_SAFE_INTEGER:
+                raise ValueError("footer: большой emoji_id передавайте строкой")
+            continue
+        if not isinstance(emoji_id, str) or not emoji_id.isascii() or not emoji_id.isdigit():
+            raise ValueError("footer: emoji_id должен быть целым числом в строке")
+        parsed_id = int(emoji_id)
+        if parsed_id < 1 or parsed_id > INT64_MAX:
+            raise ValueError("footer: emoji_id вне допустимого диапазона")
     items = parse_footer(json.dumps(raw, ensure_ascii=False))
     for it in items:
         if len(str(it.get("text", ""))) > 128 or len(str(it.get("url", ""))) > 256:
@@ -96,6 +143,18 @@ def _v_footer(raw):
         if len(str(it.get("emoji", ""))) > 16:
             raise ValueError("footer: emoji слишком длинный")
     return items
+
+
+def footer_for_api(items: list[dict]) -> list[dict]:
+    """Copy footer values for JSON without exposing 64-bit Telegram IDs as JS numbers."""
+    out = []
+    for item in items:
+        public_item = dict(item)
+        emoji_id = public_item.get("emoji_id")
+        if emoji_id is not None:
+            public_item["emoji_id"] = str(emoji_id)
+        out.append(public_item)
+    return out
 
 
 VALIDATORS = {
@@ -112,8 +171,13 @@ VALIDATORS = {
     "publishing_paused": _v_bool,
     "ai_enabled": _v_bool,
     "ai_required": _v_bool,
+    "ai_api_key": _v_api_key,
     "ai_base_url": _v_url,
     "ai_model": _v_str(200),
+    "ai_secondary_api_key": _v_api_key,
+    "ai_secondary_base_url": _v_optional_url,
+    "ai_secondary_model": _v_optional_str(200),
+    "ai_active_profile": _v_int(1, 2),
     "ai_prompt": _v_str(4000),
     "ai_timeout": _v_int(5, 300),
     "footer": _v_footer,
@@ -123,7 +187,9 @@ SECTIONS = {
     "schedule": ["tz_name", "publish_times", "schedule_pattern", "candidate_min_age_min",
                  "max_post_age_hours", "best_min_score", "baseline_days", "own_min_age_days",
                  "repost_cooldown_days", "collect_interval", "publishing_paused"],
-    "ai": ["ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout"],
+    "ai": ["ai_enabled", "ai_required", "ai_api_key", "ai_base_url", "ai_model",
+           "ai_secondary_api_key", "ai_secondary_base_url", "ai_secondary_model",
+           "ai_active_profile", "ai_prompt", "ai_timeout"],
     "footer": ["footer"],
 }
 
@@ -160,6 +226,10 @@ class RuntimeSettings:
     def default(self, key: str):
         if key == "publishing_paused":
             return False
+        if key in {"ai_secondary_api_key", "ai_secondary_base_url", "ai_secondary_model"}:
+            return ""
+        if key == "ai_active_profile":
+            return 1
         return getattr(self.cfg, key)
 
     async def _overrides(self) -> dict:
@@ -184,11 +254,17 @@ class RuntimeSettings:
             v = [dtime.fromisoformat(x) for x in v]
         return v
 
-    async def view(self) -> SimpleNamespace:
-        """Синхронный снимок для воркера: все runtime-ключи + ai_api_key (только ENV)."""
+    async def view(self, profile: int | None = None) -> SimpleNamespace:
+        """Снимок воркера; стандартные AI-поля указывают на выбранный профиль."""
         ov = await self._overrides()
         d = {k: self._resolved(k, ov) for k in VALIDATORS}
-        d["ai_api_key"] = self.cfg.ai_api_key
+        selected = d["ai_active_profile"] if profile is None else profile
+        if isinstance(selected, bool) or selected not in (1, 2):
+            raise SettingsError("profile: ожидается 1 или 2")
+        if selected == 2:
+            d["ai_base_url"] = d["ai_secondary_base_url"]
+            d["ai_model"] = d["ai_secondary_model"]
+            d["ai_api_key"] = d["ai_secondary_api_key"]
         return SimpleNamespace(**d)
 
     async def get(self, key: str):
@@ -200,9 +276,13 @@ class RuntimeSettings:
         ov = await self._overrides()
         out = {}
         for k in VALIDATORS:
+            if k in {"ai_api_key", "ai_secondary_api_key"}:
+                continue
             v = self._resolved(k, ov)
             if k == "publish_times":
                 v = [t.strftime("%H:%M") for t in v]
+            elif k == "footer":
+                v = footer_for_api(v)
             out[k] = v
         return out
 

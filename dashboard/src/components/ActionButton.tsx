@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { humanLabel } from "@/components/ui";
 
 type Props = {
   path: string;
@@ -14,9 +15,9 @@ type Props = {
 };
 
 const VARIANTS = {
-  default: "border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200",
-  primary: "border-sky-700 bg-sky-800 hover:bg-sky-700 text-sky-100",
-  danger: "border-red-800 bg-red-900/70 hover:bg-red-800 text-red-200",
+  default: "button-secondary",
+  primary: "button-primary",
+  danger: "button-danger",
 };
 
 async function pollAction(id: string): Promise<any> {
@@ -37,7 +38,7 @@ async function pollAction(id: string): Promise<any> {
 
 function summarize(r: any): string {
   if (!r || typeof r !== "object") return "";
-  if (typeof r.status === "string") return r.status;
+  if (typeof r.status === "string") return r.status === "already_published" ? "Уже опубликован" : humanLabel(r.status);
   if (r.added !== undefined) return `+${r.added}`;
   if (r.posts !== undefined) return `${r.posts} постов`;
   if (typeof r.reply === "string" && r.reply) return r.reply.slice(0, 80);
@@ -77,6 +78,12 @@ export default function ActionButton({
       if (data?.action_id) {
         const done = await pollAction(data.action_id);
         if (done.status === "completed") {
+          if (["failed", "ambiguous", "pending", "skipped"].includes(done.result?.status)) {
+            throw new Error(`Публикация не завершена: ${humanLabel(done.result.status)}. Подробности — в карточке поста.`);
+          }
+          if (done.result?.ai_status && !["generated", "manual"].includes(done.result.ai_status)) {
+            throw new Error(`Текст не создан: ${humanLabel(done.result.ai_status)}. Подробности — в истории.`);
+          }
           setState("ok");
           setMsg(`${doneLabel}${summarize(done.result) ? `: ${summarize(done.result)}` : ""}`);
         } else {
@@ -99,12 +106,12 @@ export default function ActionButton({
       <button
         onClick={run}
         disabled={state === "run"}
-        className={`rounded border px-2 py-1 text-xs disabled:opacity-50 ${VARIANTS[variant]}`}
+        className={`${VARIANTS[variant]} disabled:cursor-not-allowed disabled:opacity-50`}
       >
-        {state === "run" ? "…" : label}
+        {state === "run" ? "Выполняется…" : label}
       </button>
       {msg && (
-        <span className={`text-xs ${state === "err" ? "text-red-400" : "text-emerald-400"}`}>{msg}</span>
+        <span role="status" className={`max-w-xs text-xs ${state === "err" ? "text-red-300" : "text-emerald-300"}`}>{msg}</span>
       )}
     </span>
   );

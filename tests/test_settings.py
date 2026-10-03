@@ -17,7 +17,7 @@ class SettingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(v.tz_name, "Europe/Moscow")
         self.assertEqual(v.schedule_pattern, ["parsed", "old"])
         self.assertFalse(v.publishing_paused)
-        self.assertEqual(v.ai_api_key, "sk-abcdef123456")   # ключ пробрасывается воркеру только из ENV
+        self.assertEqual(v.ai_api_key, "sk-abcdef123456")
 
     async def test_db_override_wins_over_env(self):
         await self.db.kv_set("rt:tz_name", json.dumps("UTC"))
@@ -64,15 +64,45 @@ class SettingsTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SettingsError, msg=f"{section} {values}"):
                 await self.s.update(section, values)
 
-    async def test_api_key_not_settable_via_panel(self):
-        with self.assertRaises(SettingsError):
-            await self.s.update("ai", {"api_key": "newkey"})
+    async def test_api_key_override_wins_over_env_and_can_be_cleared(self):
+        await self.s.update("ai", {"ai_api_key": "sk-runtime-987654"})
+        self.assertEqual((await self.s.view()).ai_api_key, "sk-runtime-987654")
+
+        await self.s.update("ai", {"ai_api_key": ""})
+        self.assertEqual((await self.s.view()).ai_api_key, "")
+
+    async def test_api_key_validation_never_echoes_secret(self):
+        secret = "s" * 4097
+        with self.assertRaises(SettingsError) as caught:
+            await self.s.update("ai", {"ai_api_key": secret})
+        self.assertNotIn(secret, str(caught.exception))
 
     async def test_api_view_json_safe_without_key(self):
         await self.s.update("schedule", {"publish_times": ["08:15"]})
         v = await self.s.api_view()
         self.assertEqual(v["publish_times"], ["08:15"])
         self.assertNotIn("ai_api_key", v)
+        self.assertEqual(
+            [item["emoji_id"] for item in v["footer"]],
+            ["5256105385420412669", "5195160091547942599"],
+        )
+
+    async def test_footer_string_id_roundtrip_keeps_exact_internal_integer(self):
+        exact = "5256105385420412669"
+        cleaned = await self.s.update("footer", {"footer": [
+            {"emoji": "👀", "emoji_id": exact, "text": "Тест", "url": "https://t.me/test"},
+        ]})
+        self.assertEqual(cleaned["footer"][0]["emoji_id"], int(exact))
+        self.assertEqual((await self.s.get("footer"))[0]["emoji_id"], int(exact))
+        self.assertEqual((await self.s.api_view())["footer"][0]["emoji_id"], exact)
+
+    async def test_footer_rejects_lossy_or_out_of_range_emoji_ids(self):
+        invalid_ids = [1.5, 5256105385420413000, str(2 ** 63), True]
+        for emoji_id in invalid_ids:
+            with self.subTest(emoji_id=emoji_id), self.assertRaises(SettingsError):
+                await self.s.update("footer", {"footer": [
+                    {"emoji": "👀", "emoji_id": emoji_id, "text": "Тест", "url": ""},
+                ]})
 
     async def test_pause_toggle(self):
         await self.s.update("schedule", {"publishing_paused": True})
