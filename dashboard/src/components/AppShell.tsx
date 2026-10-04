@@ -11,6 +11,7 @@ const NAV = [
   { href: "/own-posts", label: "Архив канала", short: "Архив", group: "Контент", icon: "archive" },
   { href: "/schedule", label: "Расписание", short: "Расписание", group: "Автоматизация", icon: "calendar" },
   { href: "/accounts", label: "Аккаунты для актива", short: "Аккаунты", group: "Автоматизация", icon: "users" },
+  { href: "/additional", label: "Дополнительно", short: "Доп.", group: "Автоматизация", icon: "network" },
   { href: "/ai", label: "Нейросеть", short: "Нейросеть", group: "Автоматизация", icon: "spark" },
   { href: "/footer", label: "Подпись к постам", short: "Подпись", group: "Автоматизация", icon: "edit" },
   { href: "/activity", label: "Журнал работы", short: "Журнал", group: "Контроль", icon: "activity" },
@@ -27,6 +28,7 @@ function Icon({ name }: { name: string }) {
     edit: <><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></>,
     activity: <><path d="M4 19V5M4 19h17"/><path d="m7 15 4-4 3 2 5-6"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3 20c0-4 2-6 6-6s6 2 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M15 15c3.7-.5 6 1.2 6 5"/></>,
+    network: <><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="m10.7 7.2-4.4 8.6M13.3 7.2l4.4 8.6M7.5 18h9"/></>,
   };
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]">{paths[name]}</svg>;
 }

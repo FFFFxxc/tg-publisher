@@ -20,6 +20,7 @@ from . import __version__, events
 from .actions import BACKFILL_SIZES
 from .db import POST_STATUSES
 from .logic import next_slot, render_footer
+from .networks import NetworkService
 from .settings import footer_for_api, validate
 
 log = logging.getLogger("api")
@@ -714,6 +715,19 @@ async def h_activity_react(request: web.Request) -> web.Response:
     return jr(result)
 
 
+@handler
+async def h_networks_get(request):
+    ctx = request.app['ctx']
+    return jr(await NetworkService(ctx.cfg, ctx.db).list())
+
+
+@handler
+async def h_networks_put(request):
+    ctx = request.app['ctx']
+    lock = getattr(getattr(ctx, 'activity', None), 'network_settings_lock', None)
+    return jr(await NetworkService(ctx.cfg, ctx.db, lock).update(request.match_info['id'], await body_json(request)))
+
+
 def build_app(ctx: ApiContext, token: str) -> web.Application:
     app = web.Application(middlewares=[auth_mw], client_max_size=MAX_BODY)
     app["ctx"], app["token"] = ctx, token
@@ -748,6 +762,8 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_get("/api/actions", h_actions)
     r.add_get("/api/actions/{id}", h_action)
     r.add_get("/api/events", h_events)
+    r.add_get("/api/networks", h_networks_get)
+    r.add_put("/api/networks/{id}", h_networks_put)
     r.add_get("/api/activity-accounts", h_activity_accounts)
     r.add_get("/api/activity-settings", h_activity_settings_get)
     r.add_put("/api/activity-settings", h_activity_settings_put)

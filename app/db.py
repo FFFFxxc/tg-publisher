@@ -184,6 +184,19 @@ ALTER TABLE activity_reactions ADD COLUMN IF NOT EXISTS target_ref TEXT NOT NULL
 ALTER TABLE activity_reactions DROP CONSTRAINT IF EXISTS activity_reactions_pkey;
 ALTER TABLE activity_reactions ADD PRIMARY KEY (account_id, target_ref, message_id);
 CREATE INDEX IF NOT EXISTS activity_reactions_message_idx ON activity_reactions (message_id);
+CREATE TABLE IF NOT EXISTS network_account_bindings (
+    network_id TEXT NOT NULL CHECK (network_id IN ('weekly','promo')),
+    account_id TEXT NOT NULL REFERENCES activity_accounts(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    next_run_at TIMESTAMPTZ NOT NULL DEFAULT now()+interval '6 hours',
+    last_run_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'waiting',
+    last_error TEXT,
+    claim_token TEXT,
+    PRIMARY KEY(network_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS network_bindings_due_idx ON network_account_bindings(next_run_at) WHERE enabled;
+
 """
 
 RET = """p.id, p.kind, p.source_id, s.ref AS source_ref, p.source_msg_ids, p.text,
@@ -341,6 +354,68 @@ class DB:
             (account_id, target_ref, message_id),
         )
 
+    async def network_bindings(self, network_id):
+        return await self._q("SELECT account_id,enabled,next_run_at,last_run_at,status,last_error "
+                             "FROM network_account_bindings WHERE network_id=%s ORDER BY account_id", (network_id,))
+
+    async def network_recent(self, network_id):
+        table = {'weekly': 'weekly_runs', 'promo': 'promo_runs'}[network_id]
+        return await self._q(f"SELECT slot,status,dest_msg_ids,error FROM {table} ORDER BY created_at DESC LIMIT 10")
+
+    async def save_network_settings(self, network_id, settings, accounts, target_changed=False):
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("INSERT INTO kv(k,v) VALUES (%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v",
+                                   ('network:'+network_id, json.dumps(settings)))
+                if target_changed:
+                    await conn.execute("UPDATE network_account_bindings SET next_run_at=now()+interval '6 hours', "
+                                       "claim_token=NULL,status='waiting',last_error=NULL WHERE network_id=%s", (network_id,))
+                if accounts is not None:
+                    await conn.execute("UPDATE network_account_bindings SET enabled=FALSE,claim_token=NULL "
+                                       "WHERE network_id=%s AND NOT(account_id=ANY(%s))", (network_id, accounts))
+                    for account_id in accounts:
+                        await conn.execute("INSERT INTO network_account_bindings(network_id,account_id) VALUES (%s,%s) "
+                                           "ON CONFLICT(network_id,account_id) DO UPDATE SET enabled=TRUE, "
+                                           "next_run_at=CASE WHEN network_account_bindings.enabled THEN network_account_bindings.next_run_at "
+                                           "ELSE now()+interval '6 hours' END, "
+                                           "status=CASE WHEN network_account_bindings.enabled THEN network_account_bindings.status ELSE 'waiting' END",
+                                           (network_id, account_id))
+
+    async def network_binding(self, network_id, account_id):
+        rows = await self._q("SELECT * FROM network_account_bindings WHERE network_id=%s AND account_id=%s",
+                             (network_id, account_id))
+        return rows[0] if rows else None
+
+    async def network_claim_target(self, account_id, target_ref):
+        return bool(await self._q(
+            "INSERT INTO kv(k,v) VALUES (%s,EXTRACT(EPOCH FROM clock_timestamp())::text) "
+            "ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v "
+            "WHERE kv.v::double precision <= EXCLUDED.v::double precision-21600 RETURNING k",
+            ('network_reaction:'+account_id+':'+target_ref,)))
+
+    async def network_recover(self):
+        await self._q("UPDATE network_account_bindings SET status='error',claim_token=NULL, "
+                      "last_error='Проверка прервалась; следующая попытка по сохранённому расписанию' "
+                      "WHERE status='processing' AND next_run_at < now()+interval '5 hours 50 minutes'")
+
+    async def network_due(self):
+        return await self._q("SELECT b.network_id,a.id FROM network_account_bindings b "
+                             "JOIN activity_accounts a ON a.id=b.account_id "
+                             "WHERE b.enabled AND a.enabled AND b.next_run_at<=now() ORDER BY b.next_run_at LIMIT 200")
+
+    async def network_claim(self, network_id, account_id, token):
+        return bool(await self._q("UPDATE network_account_bindings b SET next_run_at=now()+interval '6 hours', "
+                                  "claim_token=%s,status='processing',last_error=NULL "
+                                  "WHERE network_id=%s AND account_id=%s AND b.enabled AND b.next_run_at<=now() "
+                                  "AND EXISTS(SELECT 1 FROM activity_accounts a WHERE a.id=b.account_id AND a.enabled) "
+                                  "RETURNING account_id", (token, network_id, account_id)))
+
+    async def network_finish(self, network_id, account_id, token, status, error=None, cooldown=0):
+        await self._q("UPDATE network_account_bindings SET status=%s,last_error=%s,last_run_at=now(),claim_token=NULL, "
+                      "next_run_at=GREATEST(next_run_at,now()+make_interval(secs => %s)) "
+                      "WHERE network_id=%s AND account_id=%s AND claim_token=%s",
+                      (status, error, cooldown, network_id, account_id, token))
+
     async def _q(self, sql, args=()):
         async with self.pool.connection() as c:
             cur = await c.execute(sql, args)
@@ -397,7 +472,9 @@ class DB:
             "INSERT INTO weekly_runs(slot,source_ref,group_key,source_msg_ids,status) SELECT %s,%s,%s,%s,'preparing' "
             "WHERE COALESCE((SELECT v::double precision FROM kv WHERE k='weekly_retry_after'),0) "
             '<= EXTRACT(EPOCH FROM now()) '
-            'ON CONFLICT DO NOTHING RETURNING slot', (slot, ref, group_key, ids)))
+            "AND (SELECT count(*) FROM weekly_runs WHERE left(slot,10)=left(%s,10) AND status <> 'skipped') < "
+            "COALESCE((SELECT (v::jsonb->>'max_posts')::int FROM kv WHERE k='network:weekly'),3) "
+            'ON CONFLICT DO NOTHING RETURNING slot', (slot, ref, group_key, ids, slot)))
 
     async def weekly_reject(self, slot, error):
         # A definite rejection publishes nothing: retain evidence separately and

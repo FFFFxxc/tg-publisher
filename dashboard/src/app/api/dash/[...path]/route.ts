@@ -38,6 +38,8 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "PATCH", re: /^activity-accounts\/[a-f0-9]+$/ },
   { method: "DELETE", re: /^activity-accounts\/[a-f0-9]+$/ },
   { method: "POST", re: /^activity-accounts\/[a-f0-9]+\/react$/ },
+  { method: "GET", re: /^networks$/ },
+  { method: "PUT", re: /^networks\/(weekly|promo)$/ },
 ];
 
 async function handle(req: NextRequest, ctx: Ctx) {

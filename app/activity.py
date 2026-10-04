@@ -13,6 +13,7 @@ from pathlib import Path
 from telethon import TelegramClient, errors, functions, types, utils
 
 from .logic import parse_ref
+from .networks import REACTION_SECONDS, load_settings, reaction_target
 
 log = logging.getLogger("activity")
 PHONE_RE = re.compile(r"^\+[1-9]\d{7,14}$")
@@ -51,6 +52,7 @@ class ActivityAccounts:
         self.clients: dict[str, object] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._settings_changed = asyncio.Event()
+        self.network_settings_lock = asyncio.Lock()
         self._last_reactions: dict[str, str] = {}
 
     def _new_client(self, session_path: str):
@@ -226,9 +228,11 @@ class ActivityAccounts:
             await self.db.set_activity_account_status(row["id"], "ready")
             return reacted
 
-    def _next_reaction(self, account_id: str) -> str:
-        configured = list(dict.fromkeys(getattr(self.cfg, "activity_reactions", None) or
-                                        [self.cfg.activity_reaction]))
+    def _next_reaction(self, account_id: str, available=None) -> str:
+        configured = list(dict.fromkeys(available if available is not None else
+                          (getattr(self.cfg, "activity_reactions", None) or [self.cfg.activity_reaction])))
+        if not configured:
+            raise ValueError('В канале не разрешены настроенные реакции')
         previous = self._last_reactions.get(account_id)
         choices = [reaction for reaction in configured if reaction != previous] or configured
         selected = secrets.choice(choices)
@@ -289,12 +293,12 @@ class ActivityAccounts:
                 await asyncio.sleep(0.5)
         raise ValueError("Заявка одобрена, но группа ещё не появилась в диалогах аккаунта") from last_error
 
-    async def _approve_join_request(self, telegram_user_id: int):
+    async def _approve_join_request(self, telegram_user_id: int, target_ref=None):
         if self.approver is None:
             raise RuntimeError("Основной аккаунт для одобрения заявки не подключён")
         if not self.approver.is_connected():
             await self.approver.connect()
-        peer = await self._resolve(self.approver, self.cfg.destination)
+        peer = await self._resolve(self.approver, target_ref or self.cfg.destination)
         for _ in range(10):
             pending = await self.approver(functions.messages.GetChatInviteImportersRequest(
                 peer=peer, offset_date=None, offset_user=types.InputUserEmpty(), limit=100,
@@ -308,6 +312,119 @@ class ActivityAccounts:
                 return
             await asyncio.sleep(0.5)
         raise RuntimeError("Заявка аккаунта на вступление не найдена для одобрения")
+
+    async def _resolve_network_target(self, client, ref, telegram_user_id):
+        kind, value = parse_ref(ref)
+        if kind == 'id' and parse_ref(self.cfg.destination) == (kind, value):
+            return await self._resolve_activity_target(client, telegram_user_id)
+        try:
+            entity = await self._resolve(client, ref)
+            if isinstance(entity, types.Channel):
+                try:
+                    await client(functions.channels.JoinChannelRequest(entity))
+                except errors.UserAlreadyParticipantError:
+                    pass
+            return entity
+        except errors.InviteRequestSentError:
+            await self._approve_join_request(telegram_user_id, ref)
+            for _ in range(10):
+                try:
+                    await client.get_dialogs()
+                    return await self._resolve(client, ref)
+                except (ValueError, errors.InviteRequestSentError):
+                    await asyncio.sleep(0.5)
+            raise RuntimeError('Заявка одобрена, но канал ещё не появился')
+
+    async def network_tick(self):
+        # Independent persisted per-account/per-channel schedule. Never inherit
+        # the primary group's interval or reset it when the worker restarts.
+        await self.db.network_recover()
+        for due in await self.db.network_due():
+            network_id, aid = due['network_id'], due['id']
+            lock = self._locks.setdefault(aid, asyncio.Lock())
+            async with lock:
+                settings = await load_settings(self.db, self.cfg, network_id)
+                if not settings['enabled']:
+                    continue
+                token = uuid.uuid4().hex
+                if not await self.db.network_claim(network_id, aid, token):
+                    continue
+                try:
+                    count = await asyncio.wait_for(self._network_react(aid, network_id, settings, token), 240)
+                    await self.db.network_finish(network_id, aid, token, 'ready' if count else 'no_new_posts')
+                except errors.FloodWaitError as exc:
+                    await self.db.network_finish(network_id, aid, token, 'error', f'FloodWait {exc.seconds}s',
+                                                 max(REACTION_SECONDS, exc.seconds))
+                except Exception as exc:
+                    detail = f'{type(exc).__name__}: {exc}'[:500]
+                    await self.db.network_finish(network_id, aid, token, 'error', detail)
+                    log.warning('network=%s account=%s reactions failed: %s', network_id, aid, detail)
+
+    async def _network_react(self, aid, network_id, settings, token):
+        row = await self.db.activity_account(aid)
+        if not row or not row['enabled']:
+            return 0
+        client = await self._client(row)
+        ref = reaction_target(network_id, settings)
+        async def active():
+            binding = await self.db.network_binding(network_id, aid)
+            current = await load_settings(self.db, self.cfg, network_id)
+            account = await self.db.activity_account(aid)
+            return (binding and binding['enabled'] and binding['claim_token'] == token
+                    and account and account['enabled'] and current['enabled']
+                    and reaction_target(network_id, current) == ref)
+
+        # Settings updates share this lock: once a save completes no obsolete
+        # join/reaction may start. An already-started RPC finishes before saving.
+        async with self.network_settings_lock:
+            if not await active():
+                return 0
+            entity = await self._resolve_network_target(client, ref, row['telegram_user_id'])
+        if isinstance(entity, types.User):
+            raise ValueError('Укажите канал или группу, а не личный аккаунт')
+        configured = getattr(self.cfg, 'activity_reactions', None) or [self.cfg.activity_reaction]
+        if isinstance(entity, types.Channel):
+            full = await client(functions.channels.GetFullChannelRequest(entity))
+            allowed = getattr(full.full_chat, 'available_reactions', None)
+            if isinstance(allowed, types.ChatReactionsNone):
+                raise ValueError('В канале отключены реакции')
+            if isinstance(allowed, types.ChatReactionsSome):
+                emojis = {r.emoticon for r in allowed.reactions if isinstance(r, types.ReactionEmoji)}
+                configured = [r for r in configured if r in emojis]
+        target_ref = str(getattr(entity, 'id', ref))
+        messages = await client.get_messages(entity, limit=self.cfg.activity_recent_limit)
+        for message in reversed(messages):
+            if not message or getattr(message, 'action', None) is not None:
+                continue
+            if await self.db.activity_reacted(aid, target_ref, message.id):
+                continue
+            # Recover a Telegram-confirmed reaction whose local receipt was lost.
+            results = getattr(getattr(message, 'reactions', None), 'results', []) or []
+            if any(getattr(r, 'chosen_order', None) is not None for r in results):
+                await self.db.mark_activity_reacted(aid, target_ref, message.id)
+                continue
+            async with self.network_settings_lock:
+                if not await active():
+                    return 0
+                reaction = self._next_reaction(aid + ':' + network_id, configured)
+                # Physical identity, not workflow/name: aliases or two workflows
+                # pointing at one peer must not double the six-hour cadence.
+                if not await self.db.network_claim_target(aid, target_ref):
+                    return 0
+                await client(functions.messages.SendReactionRequest(peer=entity, msg_id=message.id,
+                    reaction=[types.ReactionEmoji(emoticon=reaction)], big=False, add_to_recent=False))
+                await self.db.mark_activity_reacted(aid, target_ref, message.id)
+            return 1
+        return 0
+
+    async def network_run(self):
+        log.info('network reactions loop started, per-account interval=6h')
+        while True:
+            try:
+                await self.network_tick()
+            except Exception:
+                log.exception('network reactions loop failed')
+            await asyncio.sleep(30)
 
     async def run(self):
         while True:
