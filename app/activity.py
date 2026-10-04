@@ -392,30 +392,44 @@ class ActivityAccounts:
                 emojis = {r.emoticon for r in allowed.reactions if isinstance(r, types.ReactionEmoji)}
                 configured = [r for r in configured if r in emojis]
         target_ref = str(getattr(entity, 'id', ref))
-        messages = await client.get_messages(entity, limit=self.cfg.activity_recent_limit)
+        cursor_key = f'network_cursor:{aid}:{target_ref}'
+        cursor = int(await self.db.kv_get(cursor_key, '0') or '0')
+        # Bootstrap from the existing recent-post window. Later cycles fetch ALL
+        # messages after the confirmed cursor, even beyond that window's size.
+        messages = (await client.get_messages(entity, limit=None, min_id=cursor) if cursor else
+                    await client.get_messages(entity, limit=self.cfg.activity_recent_limit))
+        reacted = 0
+        batch_claimed = False
         for message in reversed(messages):
             if not message or getattr(message, 'action', None) is not None:
                 continue
             if await self.db.activity_reacted(aid, target_ref, message.id):
+                await self.db.kv_set(cursor_key, str(message.id))
                 continue
             # Recover a Telegram-confirmed reaction whose local receipt was lost.
             results = getattr(getattr(message, 'reactions', None), 'results', []) or []
             if any(getattr(r, 'chosen_order', None) is not None for r in results):
                 await self.db.mark_activity_reacted(aid, target_ref, message.id)
+                await self.db.kv_set(cursor_key, str(message.id))
                 continue
             async with self.network_settings_lock:
                 if not await active():
-                    return 0
+                    return reacted
                 reaction = self._next_reaction(aid + ':' + network_id, configured)
-                # Physical identity, not workflow/name: aliases or two workflows
-                # pointing at one peer must not double the six-hour cadence.
-                if not await self.db.network_claim_target(aid, target_ref):
-                    return 0
+                # Claim the whole batch once, not each message. Aliases and two
+                # workflows pointing at one peer still share the six-hour cycle.
+                if not batch_claimed:
+                    if not await self.db.network_claim_target(aid, target_ref):
+                        return reacted
+                    batch_claimed = True
                 await client(functions.messages.SendReactionRequest(peer=entity, msg_id=message.id,
                     reaction=[types.ReactionEmoji(emoticon=reaction)], big=False, add_to_recent=False))
                 await self.db.mark_activity_reacted(aid, target_ref, message.id)
-            return 1
-        return 0
+                await self.db.kv_set(cursor_key, str(message.id))
+                reacted += 1
+            await asyncio.sleep(0.2)
+        log.info('network=%s account=%s reacted=%s target=%s', network_id, aid, reacted, target_ref)
+        return reacted
 
     async def network_run(self):
         log.info('network reactions loop started, per-account interval=6h')

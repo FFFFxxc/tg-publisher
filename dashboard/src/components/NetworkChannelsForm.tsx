@@ -117,7 +117,7 @@ export default function NetworkChannelsForm({ initial }: { initial: Payload }) {
               </>}
             </div>
             <div className="rounded-xl border border-slate-700/50 bg-slate-950/20 p-4"><div className="text-xs font-semibold text-slate-300">Аккаунты для реакций каждые {data.reaction_interval_hours || 6} часов</div>
-              <p className="mt-1 text-[11px] leading-5 text-slate-500">{item.id === "weekly" ? "Реакции ставятся публикациям в канале назначения." : "Реакции ставятся публикациям рекламируемого канала-источника."} Каждый аккаунт ставит максимум одну новую реакцию за цикл.</p>
+              <p className="mt-1 text-[11px] leading-5 text-slate-500">{item.id === "weekly" ? "Реакции ставятся публикациям в канале назначения." : "Реакции ставятся публикациям рекламируемого канала-источника."} Каждый аккаунт отмечает все новые посты за цикл. Уже отмеченные посты пропускаются.</p>
               <div className="mt-2 grid gap-3 lg:grid-cols-2">{data.accounts.map((account) => {
                 const binding = bindings.find((value) => value.account_id === account.id);
                 const selected = draft.account_ids.includes(account.id);

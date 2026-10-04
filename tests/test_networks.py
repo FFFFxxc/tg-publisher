@@ -42,6 +42,9 @@ class FakeNetworkDB:
     async def kv_get(self, key, default=None):
         return self.kv.get(key, default)
 
+    async def kv_set(self, key, value):
+        self.kv[key] = str(value)
+
     async def activity_accounts(self):
         return [dict(row) for row in self.accounts]
 
@@ -159,7 +162,7 @@ class FakeClient:
     async def get_dialogs(self):
         return []
 
-    async def get_messages(self, entity, limit):
+    async def get_messages(self, entity, limit, min_id=0):
         if self.fail:
             raise self.fail
         if self.cancel_binding:
@@ -169,9 +172,10 @@ class FakeClient:
             self.db.kv["network:" + network_id] = json.dumps(partial)
         chosen_order = 0 if self.chosen else None
         reactions = SimpleNamespace(results=[SimpleNamespace(chosen_order=chosen_order)]) if self.chosen else None
-        return [SimpleNamespace(id=3, action=None, reactions=None),
+        messages = [SimpleNamespace(id=3, action=None, reactions=None),
                 SimpleNamespace(id=2, action=None, reactions=None),
                 SimpleNamespace(id=1, action=None, reactions=reactions)]
+        return [message for message in messages if message.id > min_id]
 
     async def __call__(self, request):
         self.requests.append(request)
@@ -309,23 +313,23 @@ class NetworkReactionTests(unittest.IsolatedAsyncioTestCase):
         await self.make_service(db, second_client).network_tick()
         sent = [request for request in first_client.requests + second_client.requests
                 if isinstance(request, functions.messages.SendReactionRequest)]
-        self.assertEqual(len(sent), 1)
+        self.assertEqual([request.msg_id for request in sent], [1, 2, 3])
 
-    async def test_network_tick_sends_at_most_one_reaction_per_account_target(self):
+    async def test_network_tick_reacts_to_every_unprocessed_post(self):
         db = FakeNetworkDB()
         db.bind("weekly")
         client = FakeClient(db)
         await self.make_service(db, client).network_tick()
         sent = [request for request in client.requests
                 if isinstance(request, functions.messages.SendReactionRequest)]
-        self.assertEqual(len(sent), 1)
+        self.assertEqual([request.msg_id for request in sent], [1, 2, 3])
 
     async def test_network_tick_saves_receipt_for_resolved_target(self):
         db = FakeNetworkDB()
         db.bind("weekly")
         client = FakeClient(db)
         await self.make_service(db, client).network_tick()
-        self.assertEqual(db.reacted, {(ACCOUNT_ID, "777", 1)})
+        self.assertEqual(db.reacted, {(ACCOUNT_ID, "777", mid) for mid in (1, 2, 3)})
 
     async def test_weekly_binding_resolves_configured_target_channel(self):
         db = FakeNetworkDB()
@@ -360,7 +364,7 @@ class NetworkReactionTests(unittest.IsolatedAsyncioTestCase):
         await self.make_service(db, client).network_tick()
         self.assertEqual(client.resolved, [])
 
-    async def test_two_workflows_resolving_same_peer_send_only_one_reaction_total(self):
+    async def test_two_workflows_resolving_same_peer_do_not_duplicate_batch(self):
         db = FakeNetworkDB()
         db.bind("weekly")
         db.bind("promo")
@@ -368,7 +372,7 @@ class NetworkReactionTests(unittest.IsolatedAsyncioTestCase):
         await self.make_service(db, client).network_tick()
         sent = [request for request in client.requests
                 if isinstance(request, functions.messages.SendReactionRequest)]
-        self.assertEqual(len(sent), 1)
+        self.assertEqual([request.msg_id for request in sent], [1, 2, 3])
 
     async def test_target_change_during_message_preparation_prevents_obsolete_send(self):
         db = FakeNetworkDB()
@@ -394,8 +398,33 @@ class NetworkReactionTests(unittest.IsolatedAsyncioTestCase):
         await self.make_service(db, client).network_tick()
         sent = [request for request in client.requests
                 if isinstance(request, functions.messages.SendReactionRequest)]
-        self.assertEqual(len(sent), 1)
+        self.assertEqual([request.msg_id for request in sent], [2, 3])
         self.assertIn((ACCOUNT_ID, "777", 1), db.reacted)
+
+    async def test_cursor_fetches_all_new_posts_without_recent_limit(self):
+        db = FakeNetworkDB()
+        db.bind("weekly")
+        db.kv["network_cursor:" + ACCOUNT_ID + ":777"] = "1"
+        client = FakeClient(db)
+        from unittest.mock import AsyncMock
+        original = client.get_messages
+        client.get_messages = AsyncMock(side_effect=original)
+        await self.make_service(db, client).network_tick()
+        client.get_messages.assert_awaited_once_with(unittest.mock.ANY, limit=None, min_id=1)
+        self.assertEqual(db.kv["network_cursor:" + ACCOUNT_ID + ":777"], "3")
+
+    async def test_failed_send_does_not_advance_cursor_past_confirmed_posts(self):
+        db = FakeNetworkDB()
+        db.bind("weekly")
+        class FailSecond(FakeClient):
+            async def __call__(self, request):
+                if isinstance(request, functions.messages.SendReactionRequest) and request.msg_id == 2:
+                    raise RuntimeError("send failed")
+                return await super().__call__(request)
+        client = FailSecond(db)
+        await self.make_service(db, client).network_tick()
+        self.assertEqual(db.kv.get("network_cursor:" + ACCOUNT_ID + ":777"), "1")
+        self.assertEqual(db.reacted, {(ACCOUNT_ID, "777", 1)})
 
 
 if __name__ == "__main__":
