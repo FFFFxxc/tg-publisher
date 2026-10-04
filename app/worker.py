@@ -259,6 +259,12 @@ class Worker:
         await self._run(post)
 
     async def _pick(self, kind, rt):
+        claim_override = getattr(self.db, "claim_overview_override", None)
+        if claim_override:
+            selected = await claim_override(kind, rt, await self._own_sid() if kind == OLD else None)
+            if selected:
+                log.info("overview override selected post=%s kind=%s", selected.id, kind)
+                return selected
         if kind == PARSED:
             await self.refresh_stats(rt.max_post_age_hours)
             return await self.db.claim_best_candidate(rt.candidate_min_age_min, rt.max_post_age_hours,

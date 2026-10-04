@@ -2,7 +2,7 @@ import Link from "next/link";
 import { pubFetch } from "@/lib/api";
 import { Badge, Card, ErrorBox, PageHeader, Td, Th, humanLabel } from "@/components/ui";
 import PostRowActions from "@/components/PostRowActions";
-import { fmtDate } from "@/lib/format";
+import { cleanPostText, fmtDate } from "@/lib/format";
 import MediaPreview from "@/components/MediaPreview";
 
 export const dynamic = "force-dynamic";
@@ -71,7 +71,7 @@ export default async function PostDetailPage({ params }: { params: { id: string 
         <div className="mt-3">
           <div className="text-xs text-zinc-500">Текст</div>
           <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-zinc-800 bg-zinc-900/60 p-2 text-sm text-zinc-300">
-            {p.text || "—"}
+            {cleanPostText(p.text, p.source_ref) || "Публикация без текста"}
           </pre>
         </div>
         {p.ai_caption && (

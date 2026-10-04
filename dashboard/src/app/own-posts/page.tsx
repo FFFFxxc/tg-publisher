@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic";
 
 export default async function OwnPostsPage({searchParams}: {searchParams: Record<string,string|undefined>}) {
   const media=searchParams.media_type || "";
+  const groupKey=searchParams.group_key || "";
   let data: any = { items: [], total: 0 };
   let error = "";
   try {
-    data = await pubFetch(`/api/own?limit=50${media?`&media_type=${encodeURIComponent(media)}`:""}`);
+    data = await pubFetch(`/api/own?limit=50${media?`&media_type=${encodeURIComponent(media)}`:""}${groupKey?`&group_key=${encodeURIComponent(groupKey)}`:""}`);
   } catch (e: any) {
     error = e?.message ?? "нет связи с Control API";
   }

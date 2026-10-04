@@ -618,7 +618,7 @@ class DB:
                 AND source_date <= now() - make_interval(mins => %s)
                 AND source_date >= now() - make_interval(hours => %s)
                 AND score >= %s
-              ORDER BY score DESC LIMIT 1
+              ORDER BY score DESC, id DESC LIMIT 1
             )
             UPDATE posts p SET status='processing', claimed_at=now(), attempts=attempts+1,
                                score=best.score, updated_at=now()
@@ -708,6 +708,23 @@ class DB:
             WHERE {where} ORDER BY p.id DESC LIMIT %s OFFSET %s""", args + [limit, offset])
         return rows, total
 
+    async def post_scores(self, ids: list[int], baseline_days: int) -> dict[int, dict]:
+        if not ids:
+            return {}
+        rows = await self._q("""WITH base AS (
+              SELECT id, source_id, views,
+                     (reactions + 3*forwards + 2*replies)::float / GREATEST(views,1) AS er
+              FROM posts WHERE kind='parsed'
+                AND source_date >= now() - make_interval(days => %s)
+            ), scored AS (
+              SELECT id, views, er, avg(er) OVER w AS avg_er, avg(views) OVER w AS avg_views
+              FROM base WINDOW w AS (PARTITION BY source_id)
+            ) SELECT id, er, avg_er, views, avg_views,
+                COALESCE(0.6*er/NULLIF(avg_er,0),0.6)
+              + COALESCE(0.4*views/NULLIF(avg_views,0),0.4) AS score
+              FROM scored WHERE id=ANY(%s)""", (baseline_days, ids))
+        return {r["id"]: dict(r) for r in rows}
+
     async def get_post(self, pid: int):
         rows = await self._q("""SELECT p.*, s.ref AS source_ref, s.title AS source_title
             FROM posts p JOIN automation_sources s ON s.id=p.source_id WHERE p.id=%s""", (pid,))
@@ -722,6 +739,184 @@ class DB:
             count(*) FILTER (WHERE published_at >= now() - interval '24 hours') AS h24
             FROM posts WHERE status='published'""", (today_start,))
         return {"today": rows[0]["today"], "h24": rows[0]["h24"]}
+
+    async def overview_queue_funnel(self) -> dict:
+        """Три понятных этапа главной без пустых технических статусов."""
+        rows = await self._q("""SELECT
+            count(*) FILTER (WHERE status IN ('candidate','pending','processing','published')) AS found,
+            count(*) FILTER (WHERE status IN ('candidate','pending')) AS ready,
+            count(*) FILTER (WHERE status='published') AS published
+            FROM posts""")
+        return dict(rows[0])
+
+    async def overview_chart_7d(self, tz_name: str) -> list[dict]:
+        """Фактические публикации и поставленные аккаунтами реакции по местным дням."""
+        pubs = await self._q("""SELECT timezone(%s, published_at)::date AS day, count(*) AS n
+            FROM posts WHERE status='published' AND published_at >= now() - interval '7 days'
+            GROUP BY 1""", (tz_name,))
+        reacts = await self._q("""SELECT timezone(%s, reacted_at)::date AS day, count(*) AS n
+            FROM activity_reactions WHERE reacted_at >= now() - interval '7 days' GROUP BY 1""", (tz_name,))
+        pm = {str(r["day"]): r["n"] for r in pubs}
+        rm = {str(r["day"]): r["n"] for r in reacts}
+        # PostgreSQL строит календарь, чтобы дни без событий не исчезали с графика.
+        days = await self._q("""SELECT d::date AS day FROM generate_series(
+            timezone(%s, now())::date - 6, timezone(%s, now())::date, interval '1 day') d""",
+                             (tz_name, tz_name))
+        return [{"date": str(r["day"]), "published": pm.get(str(r["day"]), 0),
+                 "reactions": rm.get(str(r["day"]), 0)} for r in days]
+
+    async def overview_last_problem(self):
+        rows = await self._q("""SELECT e.*, p.status AS post_status, p.ai_status, p.dest_msg_ids,
+                   p.send_started_at, s.ref AS source_ref, a.kind AS action_kind,
+                   a.error AS action_error
+            FROM events e LEFT JOIN posts p ON p.id=e.post_id
+            LEFT JOIN automation_sources s ON s.id=p.source_id
+            LEFT JOIN dashboard_actions a ON a.id=e.action_id
+            WHERE e.level IN ('warning','error') ORDER BY e.id DESC LIMIT 1""")
+        return rows[0] if rows else None
+
+    async def _overview_parsed(self, min_age_min, max_age_h, baseline_days, min_score,
+                               selected_id: int | None = None, after_id: int | None = None):
+        extra, args = "", [baseline_days, min_age_min, max_age_h, min_score]
+        if selected_id is not None:
+            extra = "AND n.id=%s"
+            args.append(selected_id)
+        rows = await self._q(f"""WITH base AS (
+              SELECT id, source_id, status, source_date, scheduled_at, views,
+                     (reactions + 3*forwards + 2*replies)::float / GREATEST(views,1) AS er
+              FROM posts WHERE kind='parsed' AND source_date >= now() - make_interval(days => %s)
+            ), norm AS (
+              SELECT id, status, source_date, scheduled_at,
+                     COALESCE(0.6*er/NULLIF(avg(er) OVER w,0),0.6)
+                   + COALESCE(0.4*views/NULLIF(avg(views) OVER w,0),0.4) AS computed_score
+              FROM base WINDOW w AS (PARTITION BY source_id)
+            ) SELECT p.*, s.ref AS source_ref, s.title AS source_title,
+                     n.computed_score AS score
+              FROM norm n JOIN posts p ON p.id=n.id JOIN automation_sources s ON s.id=p.source_id
+             WHERE n.status='candidate' AND n.scheduled_at IS NULL
+               AND n.source_date <= now() - make_interval(mins => %s)
+               AND n.source_date >= now() - make_interval(hours => %s)
+               AND n.computed_score >= %s {extra}
+             ORDER BY n.computed_score DESC, p.id DESC LIMIT 50""", tuple(args))
+        if after_id is not None and rows:
+            ids = [r["id"] for r in rows]
+            if len(ids) == 1 and ids[0] == after_id:
+                return None
+            pos = ids.index(after_id) + 1 if after_id in ids else 0
+            return rows[pos % len(rows)]
+        return rows[0] if rows else None
+
+    async def _overview_old(self, min_age_days, cooldown_days, selected_key: str | None = None,
+                            after_key: str | None = None):
+        extra, args = "", [min_age_days, cooldown_days]
+        if selected_key is not None:
+            extra = "AND o.group_key=%s"
+            args.append(selected_key)
+        rows = await self._q(f"""SELECT o.*, o.reactions::float AS score
+            FROM own_posts o WHERE o.post_date <= now() - make_interval(days => %s)
+              AND (o.last_reposted_at IS NULL OR o.last_reposted_at <= now() - make_interval(days => %s))
+              AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && o.msg_ids)
+              AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids=o.msg_ids
+                              AND r.status IN ('candidate','processing','pending','ambiguous'))
+              {extra} ORDER BY o.reactions DESC, o.forwards DESC, o.group_key LIMIT 50""", tuple(args))
+        if after_key is not None and rows:
+            keys = [r["group_key"] for r in rows]
+            if len(keys) == 1 and keys[0] == after_key:
+                return None
+            pos = keys.index(after_key) + 1 if after_key in keys else 0
+            return rows[pos % len(rows)]
+        return rows[0] if rows else None
+
+    async def overview_next_post(self, planned: str, rt, next_slot=None):
+        retry = await self._q("""SELECT p.*, s.ref AS source_ref, s.title AS source_title,
+                   COALESCE(p.next_attempt_at, now()) AS due_at
+            FROM posts p JOIN automation_sources s ON s.id=p.source_id
+            WHERE p.status='pending' AND p.scheduled_at IS NULL
+              AND cardinality(p.dest_msg_ids)=0
+              AND (%s::timestamptz IS NULL OR p.next_attempt_at IS NULL OR p.next_attempt_at <= %s)
+            ORDER BY p.next_attempt_at NULLS FIRST, p.id LIMIT 1""", (next_slot, next_slot))
+        # Ручное расписание имеет приоритет, только если оно наступит раньше обычного слота.
+        scheduled = await self._q("""SELECT p.*, s.ref AS source_ref, s.title AS source_title
+            FROM posts p JOIN automation_sources s ON s.id=p.source_id
+            WHERE p.scheduled_at IS NOT NULL AND p.status IN ('candidate','pending')
+              AND p.send_started_at IS NULL AND cardinality(p.dest_msg_ids)=0
+              AND (%s::timestamptz IS NULL OR p.scheduled_at <= %s)
+            ORDER BY p.scheduled_at, p.id LIMIT 1""", (next_slot, next_slot))
+        # Retry выполняется только на обычном publish-тике; ручное время до него всегда раньше.
+        if scheduled:
+            row = dict(scheduled[0]); row["selection"] = "scheduled"; return row
+        if retry:
+            row = dict(retry[0]); row["selection"] = "retry"; return row
+        for kind in (planned, "old" if planned == "parsed" else "parsed"):
+            key = await self.kv_get(f"overview_override:{kind}")
+            if kind == "parsed":
+                row = await self._overview_parsed(rt.candidate_min_age_min, rt.max_post_age_hours,
+                                                  rt.baseline_days, rt.best_min_score,
+                                                  int(key) if key and key.isdigit() else None)
+                if row is None and key:
+                    row = await self._overview_parsed(rt.candidate_min_age_min, rt.max_post_age_hours,
+                                                      rt.baseline_days, rt.best_min_score)
+                    key = ""
+            else:
+                row = await self._overview_old(rt.own_min_age_days, rt.repost_cooldown_days, key or None)
+                if row is None and key:
+                    row = await self._overview_old(rt.own_min_age_days, rt.repost_cooldown_days)
+                    key = ""
+            if row:
+                row = dict(row); row["selection"] = "override" if key else "ranking"; row["kind"] = kind
+                return row
+        return None
+
+    async def replace_overview_next_post(self, kind: str, current, rt):
+        if kind == "parsed":
+            row = await self._overview_parsed(rt.candidate_min_age_min, rt.max_post_age_hours,
+                                              rt.baseline_days, rt.best_min_score, after_id=int(current))
+            if row:
+                await self.kv_set("overview_override:parsed", str(row["id"]))
+        elif kind == "old":
+            row = await self._overview_old(rt.own_min_age_days, rt.repost_cooldown_days,
+                                           after_key=str(current))
+            if row:
+                await self.kv_set("overview_override:old", row["group_key"])
+        else:
+            raise ValueError("Недопустимый тип публикации")
+        if not row:
+            raise LookupError("Нет другого подходящего поста")
+        row = dict(row); row["kind"] = kind; row["selection"] = "override"
+        return row
+
+    async def claim_overview_override(self, kind: str, rt, own_sid: int | None = None) -> Post | None:
+        key_name = f"overview_override:{kind}"
+        key = await self.kv_get(key_name)
+        if not key:
+            return None
+        if kind == "parsed" and key.isdigit():
+            eligible = await self._overview_parsed(rt.candidate_min_age_min, rt.max_post_age_hours,
+                                                   rt.baseline_days, rt.best_min_score, int(key))
+            if eligible:
+                rows = await self._q(f"""UPDATE posts p SET status='processing', claimed_at=now(),
+                    attempts=attempts+1, score=%s, updated_at=now() FROM automation_sources s
+                    WHERE p.id=%s AND p.status='candidate' AND p.scheduled_at IS NULL
+                      AND s.id=p.source_id RETURNING {RET}""", (eligible["score"], int(key)))
+                if rows:
+                    await self.kv_set(key_name, "")
+                    return Post(**rows[0])
+        elif kind == "old":
+            eligible = await self._overview_old(rt.own_min_age_days, rt.repost_cooldown_days, key)
+            if eligible:
+                rows = await self._q("""WITH chosen AS (
+                    UPDATE own_posts SET last_reposted_at=now(),updated_at=now() WHERE group_key=%s
+                    RETURNING group_key,msg_ids,post_date,text,reactions,media_type)
+                    INSERT INTO posts(source_id,kind,group_key,source_msg_ids,source_date,text,status,
+                                      ai_status,attempts,claimed_at,reactions,media_type)
+                    SELECT %s,'repost','r'||group_key||':'||extract(epoch FROM now())::bigint,msg_ids,
+                           post_date,text,'processing','not_needed',1,now(),reactions,media_type FROM chosen
+                    RETURNING id""", (key, own_sid)) if own_sid else []
+                if rows:
+                    await self.kv_set(key_name, "")
+                    return await self._load(rows[0]["id"])
+        await self.kv_set(key_name, "")
+        return None
 
     async def last_published_at(self):
         rows = await self._q("SELECT max(published_at) AS t FROM posts WHERE status='published'")

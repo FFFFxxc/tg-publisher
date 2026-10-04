@@ -6,6 +6,8 @@ type Ctx = { params: { path: string[] } };
 /** Белый список под-путей Control API, доступных панели. Метод зафиксирован. */
 const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "GET", re: /^overview$/ },
+  { method: "POST", re: /^overview\/next-post\/replace$/ },
+  { method: "GET", re: /^overview\/destination-avatar$/ },
   { method: "GET", re: /^sources$/ },
   { method: "POST", re: /^sources$/ },
   { method: "PATCH", re: /^sources\/\d+$/ },
@@ -49,7 +51,7 @@ async function handle(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "not allowed" }, { status: 404 });
   }
   try {
-    if (method === "GET" && /^(posts\/\d+\/preview|own\/preview)$/.test(sub)) {
+    if (method === "GET" && /^(posts\/\d+\/preview|own\/preview|overview\/destination-avatar)$/.test(sub)) {
       const upstream = await pubResponse(`/api/${sub}${req.nextUrl.search}`);
       if (upstream.status === 204) return new NextResponse(null, { status: 204 });
       if (!upstream.ok) {

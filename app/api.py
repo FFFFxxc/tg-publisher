@@ -8,10 +8,11 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 from psycopg import errors as pg_errors
@@ -144,6 +145,56 @@ def _event_brief(e) -> dict | None:
             "post_id": e["post_id"], "source_id": e["source_id"], "created_at": e["created_at"]}
 
 
+def _safe_problem_text(value) -> str:
+    text = str(value or "")[:500]
+    text = re.sub(r"(?i)bearer\s+[a-z0-9._~+/-]+", "Bearer ••••", text)
+    return re.sub(r"(?i)\bsk-[a-z0-9_-]{8,}", "sk-••••", text)
+
+
+PROCESS_LABELS = {
+    "collect": "Сбор постов", "publish": "Автопубликация", "actions": "Команды панели",
+    "scheduled": "Публикации по времени", "promo": "Реклама сеточного канала",
+    "weekly": "Лучшие посты недели", "captions": "Подготовка подписей",
+}
+
+
+def _processes(worker, rt) -> list[dict]:
+    expected = {
+        "collect": rt.collect_interval,
+        "publish": 30 if rt.publish_times else worker.cfg.publish_interval,
+        "actions": 5, "scheduled": 5, "promo": 30, "weekly": 30, "captions": 120,
+    }
+    out = []
+    for name, cadence in expected.items():
+        last = worker.heartbeat.get(name)
+        age = round(max(time.time() - last, 0)) if last is not None else None
+        state = ("red" if age is None else "green" if age <= cadence * 1.5 else
+                 "yellow" if age <= cadence * 3 else "red")
+        out.append({"id": name, "label": PROCESS_LABELS.get(name, name), "age_s": age,
+                    "expected_interval_s": cadence, "state": state})
+    return out
+
+
+def _overview_post(row) -> dict | None:
+    if not row:
+        return None
+    kind = row.get("kind") or "parsed"
+    old = kind == "old"
+    ident = row.get("group_key") if old else row.get("id")
+    encoded_ident = quote(str(ident), safe="")
+    return {
+        "kind": kind, "id": None if old else row.get("id"),
+        "group_key": row.get("group_key") if old else None,
+        "text": (row.get("text") or "")[:500], "score": row.get("score"),
+        "media_type": row.get("media_type", "unknown"), "source_ref": row.get("source_ref"),
+        "source_title": row.get("source_title"), "scheduled_at": row.get("scheduled_at"),
+        "selection": row.get("selection"),
+        "preview_url": (f"/api/dash/own/preview?group_key={encoded_ident}" if old else
+                        f"/api/dash/posts/{ident}/preview"),
+        "post_url": (f"/own-posts?group_key={encoded_ident}" if old else f"/queue/{ident}"),
+    }
+
+
 def handler(fn):
     async def wrapped(request: web.Request) -> web.Response:
         try:
@@ -189,33 +240,141 @@ async def h_overview(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     w, db = ctx.worker, ctx.db
     rt = await ctx.settings.view()
-    ages = {k: round(max(time.time() - v, 0)) for k, v in w.heartbeat.items()}
-    online = bool(ages) and max(ages.values()) < 1800
+    processes = _processes(w, rt)
+    ages = {p["id"]: p["age_s"] for p in processes}
+    known_ages = [v for v in ages.values() if v is not None]
+    online = bool(known_ages) and min(known_ages) < 1800
     tz = ZoneInfo(rt.tz_name)
     now_local = datetime.now(tz)
     today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     idx = int(await db.kv_get("pattern_idx", "0"))
     pattern = rt.schedule_pattern or []
     nxt = next_slot(now_local, rt.publish_times)
+    if nxt is None:
+        last_publish_tick = w.heartbeat.get("publish", time.time())
+        nxt = datetime.fromtimestamp(max(time.time(), last_publish_tick + w.cfg.publish_interval), tz)
     last_pub = await db.last_published_at()
     last_collect = float(await db.kv_get("last_collect_at", "0"))
+    planned = pattern[idx % len(pattern)] if pattern else None
+    next_post = None
+    if planned and hasattr(db, "overview_next_post"):
+        next_post = _overview_post(await db.overview_next_post(planned, rt, nxt))
+    problem_detail = await db.overview_last_problem() if hasattr(db, "overview_last_problem") else await db.last_error_event()
+    problem = _event_brief(problem_detail)
+    if problem and hasattr(db, "overview_last_problem"):
+        metadata = problem_detail.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {}
+        action_kind = problem_detail.get("action_kind") or problem_detail.get("message")
+        actual_error = problem_detail.get("action_error") or metadata.get("error")
+        if actual_error:
+            problem["message"] = _safe_problem_text(actual_error)
+        ai_retry = (problem_detail.get("post_id") and
+                    (problem_detail.get("type") == events.AI_FAILED or
+                     (problem_detail.get("type") == events.ACTION_FAILED and action_kind == "generate_ai")) and
+                    problem_detail.get("post_status") in ("candidate", "pending", "failed", "expired") and
+                    not problem_detail.get("dest_msg_ids") and not problem_detail.get("send_started_at"))
+        publish_retry = (problem_detail.get("post_id") and
+                         problem_detail.get("post_status") == "failed" and
+                         not problem_detail.get("dest_msg_ids") and
+                         not problem_detail.get("send_started_at"))
+        problem.update({
+            "retryable": bool(ai_retry or publish_retry),
+            "retry_path": (f"posts/{problem_detail['post_id']}/ai" if ai_retry else
+                           f"posts/{problem_detail['post_id']}/requeue" if publish_retry else None),
+            "retry_body": {"force": True} if ai_retry else None,
+            "post_url": f"/queue/{problem_detail['post_id']}" if problem_detail.get("post_id") else None,
+            "source_ref": problem_detail.get("source_ref"),
+        })
+    dest = getattr(w, "dest", None)
+    retry_at = getattr(w, "_dest_meta_retry_at", 0)
+    if dest is None and time.time() >= retry_at and hasattr(w, "_dest"):
+        try:
+            dest = await asyncio.wait_for(w._dest(), 5)
+        except Exception:
+            w._dest_meta_retry_at = time.time() + 300
+            log.warning("destination metadata temporarily unavailable")
+    dest_title = getattr(dest, "title", None) or getattr(dest, "first_name", None) or w.cfg.destination
     return jr({
         "worker": {"online": online, "heartbeat_age_s": ages, "version": __version__,
                    "telegram_connected": bool(w.client.is_connected()),
-                   "transport": "socks5" if w.cfg.proxy else "direct"},
+                   "transport": "socks5" if w.cfg.proxy else "direct", "processes": processes},
         "db": {"ok": await db.ping(), "schema": db.schema},
-        "destination": w.cfg.destination,
+        "destination": {"ref": w.cfg.destination, "title": dest_title,
+                        "avatar_url": "/api/dash/overview/destination-avatar" if getattr(dest, "photo", None) else None},
         "sources_enabled": await db.enabled_sources_count(),
         "queue": await db.counts_by_status(),
+        "queue_funnel": await db.overview_queue_funnel() if hasattr(db, "overview_queue_funnel") else None,
         "published": await db.published_stats(today_start),
         "last_collect_age_s": round(time.time() - last_collect) if last_collect else None,
         "last_published_at": last_pub.isoformat() if last_pub else None,
-        "last_error": _event_brief(await db.last_error_event()),
+        "last_error": problem,
+        "next_post": next_post,
+        "chart_7d": await db.overview_chart_7d(rt.tz_name) if hasattr(db, "overview_chart_7d") else [],
         "schedule": {"paused": rt.publishing_paused, "pattern": pattern, "pattern_index": idx,
-                     "next_kind": pattern[idx % len(pattern)] if pattern else None,
+                     "next_kind": planned,
                      "next_slot": nxt.isoformat() if nxt else None,
                      "publish_times": [t.strftime("%H:%M") for t in rt.publish_times], "tz": rt.tz_name},
     })
+
+
+@handler
+async def h_overview_replace(request: web.Request) -> web.Response:
+    ctx: ApiContext = request.app["ctx"]
+    body = await body_json(request)
+    if set(body) != {"kind", "current"}:
+        raise ValueError("Укажите kind и current")
+    kind = body["kind"]
+    current = body["current"]
+    if kind == "parsed":
+        if isinstance(current, bool) or not isinstance(current, int) or current <= 0:
+            raise ValueError("Неверный id публикации")
+    elif kind == "old":
+        if not isinstance(current, str) or not current or len(current) > 200:
+            raise ValueError("Неверный ключ публикации")
+    else:
+        raise ValueError("Недопустимый тип публикации")
+    rt = await ctx.settings.view()
+    tz = ZoneInfo(rt.tz_name)
+    regular_at = next_slot(datetime.now(tz), rt.publish_times)
+    if regular_at is None:
+        tick = ctx.worker.heartbeat.get("publish", time.time())
+        regular_at = datetime.fromtimestamp(max(time.time(), tick + ctx.worker.cfg.publish_interval), tz)
+    idx = int(await ctx.db.kv_get("pattern_idx", "0"))
+    pattern = rt.schedule_pattern or []
+    planned = pattern[idx % len(pattern)] if pattern else kind
+    actual = await ctx.db.overview_next_post(planned, rt, regular_at)
+    actual_key = actual.get("group_key") if kind == "old" and actual else actual.get("id") if actual else None
+    if (not actual or actual.get("selection") not in ("ranking", "override") or
+            actual.get("kind") != kind or actual_key != current):
+        raise ValueError("Сейчас первой идёт публикация по времени или повтор; заменять её нельзя")
+    row = await ctx.db.replace_overview_next_post(kind, current, rt)
+    return jr({"ok": True, "next_post": _overview_post(row)})
+
+
+@handler
+async def h_destination_avatar(request: web.Request) -> web.Response:
+    ctx: ApiContext = request.app["ctx"]
+    dest = getattr(ctx.worker, "dest", None)
+    if dest is None or not getattr(dest, "photo", None):
+        return web.Response(status=204, headers={"Cache-Control": "private, max-age=300"})
+    cached = getattr(ctx.worker, "_destination_avatar", None)
+    cached_at = getattr(ctx.worker, "_destination_avatar_at", 0)
+    if not cached or time.time() - cached_at > 3600:
+        try:
+            cached = await asyncio.wait_for(ctx.worker.client.download_profile_photo(dest, file=bytes), 5)
+        except Exception:
+            log.warning("destination avatar temporarily unavailable")
+            cached = None
+        ctx.worker._destination_avatar = cached
+        ctx.worker._destination_avatar_at = time.time()
+    if not cached:
+        return web.Response(status=204, headers={"Cache-Control": "private, max-age=300"})
+    return web.Response(body=cached, content_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=3600"})
 
 
 @handler
@@ -318,6 +477,12 @@ async def h_posts(request: web.Request) -> web.Response:
     limit, offset = parse_paging(request.query)
     filters = parse_posts_filters(request.query)
     items, total = await ctx.db.posts_page(filters, limit, offset)
+    if hasattr(ctx.db, "post_scores"):
+        rt = await ctx.settings.view()
+        scores = await ctx.db.post_scores([it["id"] for it in items if it.get("kind") == "parsed"], rt.baseline_days)
+        for it in items:
+            if it["id"] in scores:
+                it.update(scores[it["id"]])
     for it in items:
         it["text"] = (it.get("text") or "")[:400]
     return jr({"items": items, "total": total, "limit": limit, "offset": offset})
@@ -574,7 +739,14 @@ async def h_own(request: web.Request) -> web.Response:
     media = request.query.get('media_type', '')
     if media and media not in {"photo", "video", "mixed", "text", "document", "unknown"}:
         raise ValueError('Неверный формат материала')
-    items, total = await ctx.db.own_page(order, limit, offset, media_type=media) if media else await ctx.db.own_page(order, limit, offset)
+    group_key = request.query.get("group_key", "").strip()
+    if group_key:
+        if len(group_key) > 200:
+            raise ValueError("Неверный ключ публикации")
+        row = await ctx.db.get_own(group_key)
+        items, total = ([row], 1) if row else ([], 0)
+    else:
+        items, total = await ctx.db.own_page(order, limit, offset, media_type=media) if media else await ctx.db.own_page(order, limit, offset)
     for it in items:
         it["text"] = (it.get("text") or "")[:200]
     return jr({"items": items, "total": total, "limit": limit, "offset": offset})
@@ -733,6 +905,8 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     app["ctx"], app["token"] = ctx, token
     r = app.router
     r.add_get("/api/overview", h_overview)
+    r.add_post("/api/overview/next-post/replace", h_overview_replace)
+    r.add_get("/api/overview/destination-avatar", h_destination_avatar)
     r.add_get("/api/sources", h_sources)
     r.add_post("/api/sources", h_source_add)
     r.add_patch("/api/sources/{id}", h_source_patch)
