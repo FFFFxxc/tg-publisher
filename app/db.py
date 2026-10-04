@@ -116,6 +116,14 @@ CREATE TABLE IF NOT EXISTS weekly_runs (
     UNIQUE(source_ref, group_key)
 );
 ALTER TABLE weekly_runs ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS weekly_rejections (
+    source_ref TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    source_msg_ids BIGINT[] NOT NULL,
+    error TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(source_ref, group_key)
+);
 ALTER TABLE own_posts ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'unknown';
 
 -- постоянные действия панели (исполняются воркером, не HTTP-запросом)
@@ -381,7 +389,7 @@ class DB:
         return bool(await self._q('SELECT 1 FROM weekly_runs WHERE slot=%s', (slot,)))
 
     async def weekly_used(self, ref):
-        rows = await self._q('SELECT group_key FROM weekly_runs WHERE source_ref=%s AND group_key IS NOT NULL', (ref,))
+        rows = await self._q('SELECT group_key FROM weekly_runs WHERE source_ref=%s AND group_key IS NOT NULL UNION SELECT group_key FROM weekly_rejections WHERE source_ref=%s', (ref, ref))
         return {r['group_key'] for r in rows}
 
     async def weekly_claim(self, slot, ref, group_key, ids):
@@ -390,6 +398,15 @@ class DB:
             "WHERE COALESCE((SELECT v::double precision FROM kv WHERE k='weekly_retry_after'),0) "
             '<= EXTRACT(EPOCH FROM now()) '
             'ON CONFLICT DO NOTHING RETURNING slot', (slot, ref, group_key, ids)))
+
+    async def weekly_reject(self, slot, error):
+        # A definite rejection publishes nothing: retain evidence separately and
+        # free the logical slot so the next ranked post can satisfy today's quota.
+        await self._q("WITH rejected AS (DELETE FROM weekly_runs WHERE slot=%s "
+                      "AND cardinality(dest_msg_ids)=0 RETURNING source_ref,group_key,source_msg_ids) "
+                      "INSERT INTO weekly_rejections(source_ref,group_key,source_msg_ids,error) "
+                      "SELECT source_ref,group_key,source_msg_ids,%s FROM rejected WHERE group_key IS NOT NULL "
+                      "ON CONFLICT(source_ref,group_key) DO UPDATE SET error=EXCLUDED.error", (slot, error))
 
     async def weekly_finish(self, slot, status, ids=(), error=None):
         await self._q('UPDATE weekly_runs SET status=%s,dest_msg_ids=%s,error=%s,updated_at=now() WHERE slot=%s',

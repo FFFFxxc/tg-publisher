@@ -189,7 +189,10 @@ class WeeklyPublisher:
             await db.weekly_finish(slot, 'ambiguous', sent_ids, f'Partial FloodWait {exc.seconds}')
             return
         except errors.RPCError as exc:
-            await db.weekly_finish(slot, 'ambiguous' if sent_ids else 'failed', sent_ids, f'{type(exc).__name__}: {exc}')
+            if sent_ids:
+                await db.weekly_finish(slot, 'ambiguous', sent_ids, f'{type(exc).__name__}: {exc}')
+            else:
+                await db.weekly_reject(slot, f'{type(exc).__name__}: {exc}')
             await events.log_event(db, 'weekly_failed', level='error', message=f'{slot}: {type(exc).__name__}')
             return
         except Exception as exc:

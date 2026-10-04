@@ -52,17 +52,19 @@ class SelectionTests(unittest.TestCase):
 
 
 class DB:
-    def __init__(self): self.runs={};self.cooldown=0
+    def __init__(self): self.runs={};self.cooldown=0;self.rejections=set()
     async def weekly_recover(self): pass
     async def weekly_start_send(self,slot):
         self.runs[slot]['status']='sending';return True
     async def weekly_has_slot(self,slot): return slot in self.runs
-    async def weekly_used(self,ref): return {r['key'] for r in self.runs.values() if r['ref']==ref}
+    async def weekly_used(self,ref): return {r['key'] for r in self.runs.values() if r['ref']==ref} | self.rejections
     async def kv_get(self,*a): return self.cooldown
     async def kv_set(self,k,v): self.cooldown=v
     async def weekly_claim(self,slot,ref,key,ids):
         if slot in self.runs or (key is not None and key in await self.weekly_used(ref)): return False
         self.runs[slot]={'ref':ref,'key':key,'ids':ids,'status':'preparing'};return True
+    async def weekly_reject(self,slot,error):
+        self.rejections.add(self.runs[slot]['key']);del self.runs[slot]
     async def weekly_finish(self,slot,status,ids=(),error=None): self.runs[slot].update(status=status,dest_ids=list(ids),error=error)
     async def weekly_defer(self,slot,retry_after): self.cooldown=retry_after;del self.runs[slot]
     async def add_event(self,*a,**kw): pass
@@ -174,7 +176,12 @@ class PublisherTests(unittest.IsolatedAsyncioTestCase):
     async def test_definite_rpc_rejection_not_ambiguous(self):
         self.client.send_message.side_effect=errors.ChatWriteForbiddenError(None)
         await self.p.tick(NOW)
-        self.assertEqual(self.db.runs[weekly_slot(NOW)]['status'],'failed')
+        self.assertFalse(self.db.runs)
+        self.assertEqual(self.db.rejections,{'m2'})
+        self.client.send_message.side_effect=None
+        await self.p.tick(NOW+timedelta(seconds=30))
+        self.assertEqual(self.db.runs[weekly_slot(NOW)]['ids'],[1])
+        self.assertEqual(self.db.runs[weekly_slot(NOW)]['status'],'published')
 
     async def test_restart_catches_up_todays_slots_with_spacing(self):
         now=next(NOW+timedelta(days=i) for i in range(30) if len(daily_times(NOW+timedelta(days=i)))==3)
