@@ -103,6 +103,19 @@ CREATE TABLE IF NOT EXISTS promo_runs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(source_ref, group_key)
 );
+CREATE TABLE IF NOT EXISTS weekly_runs (
+    slot TEXT PRIMARY KEY,
+    source_ref TEXT NOT NULL,
+    group_key TEXT,
+    source_msg_ids BIGINT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'preparing',
+    dest_msg_ids BIGINT[] NOT NULL DEFAULT '{}',
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(source_ref, group_key)
+);
+ALTER TABLE weekly_runs ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ;
 ALTER TABLE own_posts ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'unknown';
 
 -- постоянные действия панели (исполняются воркером, не HTTP-запросом)
@@ -352,6 +365,40 @@ class DB:
         await self._q("WITH cooldown AS (INSERT INTO kv(k,v) VALUES ('promo_retry_after',%s) "
                       "ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v RETURNING k) "
                       "DELETE FROM promo_runs WHERE slot=%s AND status='sending' "
+                      "AND EXISTS(SELECT 1 FROM cooldown)", (str(retry_after), slot))
+
+    async def weekly_recover(self):
+        await self._q("DELETE FROM weekly_runs WHERE status='preparing' AND send_started_at IS NULL "
+                      "AND cardinality(dest_msg_ids)=0 AND updated_at < now()-interval '20 minutes'")
+        await self._q("UPDATE weekly_runs SET status='ambiguous',error='Interrupted after send boundary',updated_at=now() "
+                      "WHERE status='sending' AND updated_at < now()-interval '20 minutes'")
+
+    async def weekly_start_send(self, slot):
+        return bool(await self._q("UPDATE weekly_runs SET status='sending',send_started_at=now(),updated_at=now() "
+                                  "WHERE slot=%s AND status='preparing' RETURNING slot", (slot,)))
+
+    async def weekly_has_slot(self, slot):
+        return bool(await self._q('SELECT 1 FROM weekly_runs WHERE slot=%s', (slot,)))
+
+    async def weekly_used(self, ref):
+        rows = await self._q('SELECT group_key FROM weekly_runs WHERE source_ref=%s AND group_key IS NOT NULL', (ref,))
+        return {r['group_key'] for r in rows}
+
+    async def weekly_claim(self, slot, ref, group_key, ids):
+        return bool(await self._q(
+            "INSERT INTO weekly_runs(slot,source_ref,group_key,source_msg_ids,status) SELECT %s,%s,%s,%s,'preparing' "
+            "WHERE COALESCE((SELECT v::double precision FROM kv WHERE k='weekly_retry_after'),0) "
+            '<= EXTRACT(EPOCH FROM now()) '
+            'ON CONFLICT DO NOTHING RETURNING slot', (slot, ref, group_key, ids)))
+
+    async def weekly_finish(self, slot, status, ids=(), error=None):
+        await self._q('UPDATE weekly_runs SET status=%s,dest_msg_ids=%s,error=%s,updated_at=now() WHERE slot=%s',
+                      (status, list(ids), error, slot))
+
+    async def weekly_defer(self, slot, retry_after):
+        await self._q("WITH cooldown AS (INSERT INTO kv(k,v) VALUES ('weekly_retry_after',%s) "
+                      "ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v RETURNING k) "
+                      "DELETE FROM weekly_runs WHERE slot=%s AND status IN ('preparing','sending') AND cardinality(dest_msg_ids)=0 "
                       "AND EXISTS(SELECT 1 FROM cooldown)", (str(retry_after), slot))
 
     async def kv_set(self, k, v):

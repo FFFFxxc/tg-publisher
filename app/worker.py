@@ -29,6 +29,7 @@ from .settings import RuntimeSettings
 from .media import album_kind, media_batches, prepare_media, media_type
 from .preview import PreviewCache
 from .promo import PromoPublisher
+from .weekly import WeeklyPublisher
 from .tg import ensure_connected, resolve
 
 log = logging.getLogger("worker")
@@ -589,12 +590,13 @@ class Worker:
         await self.db.fail_stale_actions(0, "interrupted by worker restart")
         await events.log_event(self.db, events.WORKER_STARTED, message=f"v{__version__}")
         pub_every = 30 if self.cfg.publish_times else self.cfg.publish_interval
-        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5, "promo": 30, "captions": 120}
+        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5, "promo": 30, "captions": 120, "weekly": 30}
         await asyncio.gather(self.loop("collect", self._collect_interval, self.collect_once),
                              self.loop("publish", pub_every, self.publish_tick),
                              self.loop("actions", 5, self.actions_tick),
                              self.loop("scheduled", 5, self.scheduled_tick),
                              self.loop("promo", 30, PromoPublisher(self).tick),
+                             self.loop("weekly", 30, WeeklyPublisher(self).tick),
                              self.loop("captions", 5, self.caption_tick),
                              self.watchdog(limits))
 
