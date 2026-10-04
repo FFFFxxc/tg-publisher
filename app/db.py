@@ -208,7 +208,10 @@ POST_STATUSES = ("candidate", "pending", "processing", "published", "failed", "a
 def build_posts_where(f: dict) -> tuple[str, list]:
     """Чистый сборщик WHERE для списка постов: только параметризованные условия."""
     conds, args = ["TRUE"], []
-    if f.get("status"):
+    if f.get("status") == "queued":
+        conds.append("p.status = ANY(%s)")
+        args.append(["candidate", "pending", "processing", "failed", "ambiguous"])
+    elif f.get("status"):
         conds.append("p.status = %s")
         args.append(f["status"])
     if f.get("kind"):

@@ -15,6 +15,7 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
 
   const params = new URLSearchParams();
   for (const k of FILTER_KEYS) if (sp(k)) params.set(k, sp(k));
+  if (!sp("status")) params.set("status", "queued");
   params.set("limit", String(LIMIT));
   params.set("offset", String((page - 1) * LIMIT));
 

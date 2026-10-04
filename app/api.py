@@ -79,7 +79,9 @@ def _day(qs, name) -> date | None:
 
 def parse_posts_filters(qs) -> dict:
     f: dict = {}
-    _one_of(qs, "status", POST_STATUSES, f)
+    _one_of(qs, "status", (*POST_STATUSES, "queued", "all"), f)
+    if f.get("status") == "all":
+        f.pop("status")
     _one_of(qs, "kind", KINDS, f)
     _one_of(qs, "media_type", {"photo", "video", "mixed", "text", "document", "unknown"}, f)
     _one_of(qs, "ai_status", AI_STATUSES, f)
