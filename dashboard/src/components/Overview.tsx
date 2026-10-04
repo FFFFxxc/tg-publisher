@@ -116,7 +116,7 @@ export default function Overview({ initial }: { initial: any }) {
         {next ? <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
           <MediaPreview postId={next.id ?? next.group_key} thumbnail src={next.preview_url} />
           <div className="min-w-0 space-y-2 text-sm text-slate-300">
-            <div className="flex flex-wrap items-center gap-2"><b title="Итоговый рейтинг относительно средних просмотров и вовлечённости этого источника" className="text-lg text-sky-300">Score {next.score != null ? Number(next.score).toFixed(2) : "—"}</b><span className="text-xs text-slate-500">{humanLabel(next.media_type)}</span></div>
+            <div className="flex flex-wrap items-center gap-2"><b title={next.kind === "old" ? "Архив ранжируется по количеству реакций" : "Итоговый рейтинг относительно средних просмотров и вовлечённости этого источника"} className="text-lg text-sky-300">{next.kind === "old" ? "Реакции" : "Score"} {next.score != null ? Number(next.score).toFixed(next.kind === "old" ? 0 : 2) : "—"}</b><span className="text-xs text-slate-500">{humanLabel(next.media_type)}</span></div>
             <p className="line-clamp-4 text-slate-300">{excerpt(postText, 260) || "Публикация без подписи"}</p>
             <div className="text-xs text-slate-500">{next.source_title || next.source_ref || "Архив канала"} · {next.scheduled_at ? `назначено на ${fmtDate(next.scheduled_at)}` : `следующий слот ${fmtDate(sched.next_slot)}`}</div>
             <a href={next.post_url} className="text-xs text-sky-400 hover:text-sky-300">Открыть публикацию →</a>
