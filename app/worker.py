@@ -20,7 +20,7 @@ from . import __version__, events
 from .actions import STALE_ACTION_SEC, dispatch
 from .ai import AIError, generate_caption, validate_caption
 from .config import Config
-from .content import filter_source_content, is_advertisement
+from .content import filter_source_content, group_is_advertisement, is_advertisement
 from .db import DB
 from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UNCHECKED, AMBIGUOUS, FAILED,
                     OLD, PARSED, SKIPPED, backoff_seconds, build_caption, due_slot, group_messages, in_window)
@@ -131,6 +131,9 @@ class Worker:
             msgs = [by_id[i] for i in ids]
             if not any(usable(m) for m in msgs):
                 continue
+            if group_is_advertisement(msgs):
+                log.info('source=%s group=%s: advertisement excluded', src['ref'], key)
+                continue
             text = next((m.message for m in msgs if m.message), "")
             await self.db.upsert_candidate(src["id"], key, ids, msgs[0].date, text, msg_stats(msgs),
                                            rt.ai_enabled)
@@ -203,6 +206,8 @@ class Worker:
         for key, ids in group_messages([(m.id, m.grouped_id) for m in msgs]):
             group = [by_id[i] for i in ids]
             if not any(usable(m) for m in group):
+                continue
+            if group_is_advertisement(group):
                 continue
             st = msg_stats(group)
             text = next((m.message for m in group if m.message), "")
@@ -371,10 +376,10 @@ class Worker:
             source_body = src_msg.message if src_msg else ''
             source_entities = src_msg.entities if src_msg else None
             allow_links = self._source_links_allowed(post, entity)
+            if group_is_advertisement(msgs) or is_advertisement(post.text):
+                await self.db.mark(post.id, SKIPPED, 'Реклама: пост исключён из публикации')
+                return log.info('skip post=%s: advertisement', post.id)
             if not allow_links:
-                if is_advertisement(source_body) or is_advertisement(post.text):
-                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
-                    return log.info('skip post=%s: foreign advertisement', post.id)
                 source_body, source_entities = filter_source_content(source_body, source_entities)
             files, file_msgs = [], []
             for m in msgs:
@@ -407,10 +412,10 @@ class Worker:
                 return
             body = ai_text or source_body
             body_ents = None if ai_text else source_entities
+            if is_advertisement(body, body_ents):
+                await self.db.mark(post.id, SKIPPED, 'Реклама: пост исключён из публикации')
+                return
             if not allow_links:
-                if is_advertisement(body):
-                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
-                    return
                 body, body_ents = filter_source_content(body, body_ents)
             caption, kept, fspecs = build_caption(body, body_ents, rt.footer, bool(files), self.cfg.premium)
             entities = await self._valid_custom_emojis((kept or []) + to_entities(fspecs))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import re
+import unicodedata
 from bisect import bisect_left
 
 from telethon.tl import types
@@ -36,16 +37,44 @@ _LINK_ENTITY_TYPES = tuple(
 _EXPLICIT_ADVERTISEMENT = re.compile(
     r"(?iu)(?<!\w)#(?:реклама|advertisement|ad)(?!\w)"
     r"|\b(?:рекламный пост|рекламная интеграция|на правах рекламы)\b"
+    r"|(?:^|\n)\s*реклама\s*(?:[.!:—-]|$)"
+    r"|\b(?:о рекламодателе|рекламодатель|партн[её]рский материал)\b"
+    r"|\berid\s*[:=]\s*[a-z0-9_-]+"
 )
+_PROMOTION = re.compile(
+    r"(?iu)\b(?:подпишись|подписывай(?:ся|тесь)|подписаться|вступай(?:те)?|"
+    r"присоединяй(?:ся|тесь)|промокод|оформить заказ|заказать|купить|переходи(?:те)?)\b"
+)
+_COMMERCIAL_SIGNALS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\bбренд\w*", r"\bнацен\w*", r"\bпоставщик\w*", r"\bдоставк\w*",
+    r"\bмагазин\w*", r"\bскидк\w*", r"\bпромокод\w*", r"\bзаказ\w*",
+))
 
 
 def _u16(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
 
-def is_advertisement(text: str | None) -> bool:
-    """Распознаёт только явную маркировку рекламы, без догадок по содержанию."""
-    return bool(_EXPLICIT_ADVERTISEMENT.search(text or ""))
+def is_advertisement(text: str | None, entities: list | None = None) -> bool:
+    """Маркировка либо рекламный призыв со ссылкой; обычные упоминания не блокируются."""
+    body = unicodedata.normalize("NFKC", text or "")
+    body = re.sub(r"[\u200b-\u200f\u2060\ufeff]", "", body)
+    if _EXPLICIT_ADVERTISEMENT.search(body):
+        return True
+    targets = [getattr(entity, "url", "") for entity in entities or []]
+    if any(_EXPLICIT_ADVERTISEMENT.search(url or "") for url in targets):
+        return True
+    has_link = any(pattern.search(body) for pattern in _PATTERNS) or any(
+        isinstance(entity, _LINK_ENTITY_TYPES) for entity in entities or []
+    )
+    return bool(has_link and (_PROMOTION.search(body) or
+                sum(bool(pattern.search(body)) for pattern in _COMMERCIAL_SIGNALS) >= 2))
+
+
+def group_is_advertisement(messages) -> bool:
+    """Проверяет все подписи альбома, включая скрытые ссылки."""
+    return any(is_advertisement(getattr(message, "message", None),
+                                getattr(message, "entities", None)) for message in messages)
 
 
 def filter_source_content(text: str | None, entities: list | None = None) -> tuple[str, list]:

@@ -9,6 +9,7 @@ import time
 from . import events
 from .ai import generate_caption
 from .logic import AI_UNCHECKED, PARSED, canonical_ref, group_messages
+from .content import group_is_advertisement
 from .tg import resolve
 
 log = logging.getLogger("actions")
@@ -80,6 +81,8 @@ async def h_backfill_source(w, payload):
     for key, ids in group_messages([(m.id, m.grouped_id) for m in msgs]):
         group = [by_id[i] for i in ids]
         if not any(usable(m) for m in group):
+            continue
+        if group_is_advertisement(group):
             continue
         text = next((m.message for m in group if m.message), "")
         items.append((key, ids, group[0].date, text, msg_stats(group)))

@@ -13,7 +13,7 @@ from telethon import errors
 from telethon.tl.types import MessageEntityBold, MessageEntityCustomEmoji, MessageEntityTextUrl, MessageMediaDocument, MessageMediaPhoto
 
 from . import events
-from .content import filter_source_content
+from .content import filter_source_content, group_is_advertisement
 from .logic import build_caption, group_messages
 from .media import album_kind, media_batches, prepare_media
 from .tg import resolve
@@ -55,6 +55,8 @@ def ranked_groups(messages, now, settle_seconds=60, lookback_hours=168):
     result = []
     for key, ids in group_messages([(m.id, m.grouped_id) for m in messages]):
         group = [by_id[i] for i in ids]
+        if group_is_advertisement(group):
+            continue
         if not all(cutoff <= m.date <= settled and not m.action and
                    not getattr(m, 'noforwards', False) and
                    (m.message or isinstance(m.media, (MessageMediaPhoto, MessageMediaDocument))) for m in group):
