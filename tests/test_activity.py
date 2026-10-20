@@ -87,7 +87,28 @@ def cfg(path):
     return SimpleNamespace(session_path=str(Path(path) / "main"), api_id=1, api_hash="hash", proxy=None,
                            destination="@private", activity_recent_limit=20,
                            activity_reaction="👍", activity_reactions=["❤", "👍", "🔥", "😍", "😁"],
-                           activity_target_invite="", activity_interval=30)
+                           activity_target_invite="", activity_extra_targets=[],
+                           activity_extra_backfill_limit=10, activity_interval=30)
+
+
+class ExtraTargetClient(FakeClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.channel = SimpleNamespace(id=404, broadcast=True, megagroup=False)
+        self.messages = [SimpleNamespace(id=i, action=None, reactions=None) for i in range(12, 0, -1)]
+        self.message_calls = []
+
+    async def get_entity(self, value):
+        if value == "private":
+            return "destination"
+        return self.channel
+
+    async def get_messages(self, entity, limit, min_id=0):
+        self.message_calls.append((entity, limit, min_id))
+        if entity == "destination":
+            return []
+        rows = [message for message in self.messages if message.id > min_id]
+        return rows if limit is None else rows[:limit]
 
 
 class JoinClient(FakeClient):
@@ -207,6 +228,42 @@ class ActivityAccountTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(db.reacted, {(result["account_id"], "@private", 1),
                                           (result["account_id"], "@private", 2)})
             await service.close()
+
+    async def test_extra_channel_is_joined_and_bootstraps_ten_then_all_new_posts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cfg(tmp)
+            c.activity_extra_targets = ["https://t.me/NikAI404"]
+            db = FakeDB()
+            service = ActivityAccounts(c, db, ExtraTargetClient)
+            started = await service.start_login("+79991234567")
+            account = await service.complete_login(started["login_token"], "12345")
+            client = service.clients[account["account_id"]]
+
+            joins = [request for request in client.requests
+                     if isinstance(request, functions.channels.JoinChannelRequest)]
+            self.assertGreaterEqual(len(joins), 1)
+
+            first = await service.react_now(account["account_id"])
+            self.assertEqual(first["reacted"], 10)
+            self.assertEqual(db.kv[f"activity_extra_cursor:{account['account_id']}:404"], "12")
+
+            client.messages = [SimpleNamespace(id=i, action=None, reactions=None)
+                               for i in range(14, 0, -1)]
+            second = await service.react_now(account["account_id"])
+            third = await service.react_now(account["account_id"])
+            self.assertEqual((second["reacted"], third["reacted"]), (2, 0))
+            self.assertIn((client.channel, None, 12), client.message_calls)
+            sent = [request.msg_id for request in client.requests
+                    if isinstance(request, functions.messages.SendReactionRequest)]
+            self.assertEqual(sent, list(range(3, 15)))
+            await service.close()
+
+    async def test_extra_targets_are_canonical_deduplicated_and_skip_primary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cfg(tmp)
+            c.activity_extra_targets = ["https://t.me/NikAI404", "@NikAI404", "@private"]
+            service = ActivityAccounts(c, FakeDB(), FakeClient)
+            self.assertEqual(service._extra_targets(), ["@NikAI404"])
 
     async def test_activity_period_persists_and_validates(self):
         with tempfile.TemporaryDirectory() as tmp:

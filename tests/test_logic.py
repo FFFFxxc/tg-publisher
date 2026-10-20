@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import datetime, time
 from types import SimpleNamespace as E
+from unittest.mock import patch
 
 from app.config import ConfigError, build_proxy, normalize_dsn, sqlalchemy_url, validate_session_string
 from app.logic import (AMBIGUOUS, DEFAULT_FOOTER, MEDIA_CAPTION_LIMIT, OLD, PARSED, PENDING, PROCESSING,
@@ -32,6 +33,22 @@ class ConfigTests(unittest.TestCase):
         r = repr(Config.from_env())
         for secret in ("SECRETHASH", "SECRETSESS", "PW"):
             self.assertNotIn(secret, r)
+
+    def test_nikai404_is_default_extra_activity_target_with_ten_post_backfill(self):
+        env = {"TG_API_ID": "1", "TG_API_HASH": "hash", "TG_DESTINATION": "@private",
+               "DATABASE_URL": "postgresql://u:p@localhost/db"}
+        from app.config import Config
+        with patch.dict(os.environ, env, clear=True):
+            cfg = Config.from_env()
+            self.assertEqual(cfg.activity_extra_targets, ["@NikAI404"])
+            self.assertEqual(cfg.activity_extra_backfill_limit, 10)
+
+    def test_extra_activity_backfill_must_stay_between_five_and_ten(self):
+        env = {"TG_API_ID": "1", "TG_API_HASH": "hash", "TG_DESTINATION": "@private",
+               "DATABASE_URL": "postgresql://u:p@localhost/db", "ACTIVITY_EXTRA_BACKFILL_LIMIT": "4"}
+        from app.config import Config
+        with patch.dict(os.environ, env, clear=True), self.assertRaises(ConfigError):
+            Config.from_env()
 
 
 class FooterTests(unittest.TestCase):

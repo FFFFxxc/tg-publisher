@@ -107,6 +107,8 @@ class Config:
     activity_reaction: str = "👍"
     activity_reactions: list = field(default_factory=lambda: ["❤", "👍", "🔥", "😍", "😁"])
     activity_target_invite: str = field(default="", repr=False)
+    activity_extra_targets: list = field(default_factory=lambda: ["@NikAI404"])
+    activity_extra_backfill_limit: int = 10
     activity_interval: int = 30
     activity_recent_limit: int = 20
 
@@ -131,6 +133,9 @@ class Config:
             activity_reactions=[x.strip() for x in _env(
                 "ACTIVITY_REACTIONS", "❤,👍,🔥,😍,😁").split(",") if x.strip()],
             activity_target_invite=_env("ACTIVITY_TARGET_INVITE").strip(),
+            activity_extra_targets=[x.strip() for x in _env(
+                "ACTIVITY_EXTRA_TARGETS", "@NikAI404").split(",") if x.strip()],
+            activity_extra_backfill_limit=_int("ACTIVITY_EXTRA_BACKFILL_LIMIT", 10),
             activity_interval=_int("ACTIVITY_INTERVAL_SEC", 30),
             activity_recent_limit=_int("ACTIVITY_RECENT_LIMIT", 20),
             collect_interval=_int("COLLECT_INTERVAL_SEC", 300),
@@ -169,4 +174,6 @@ class Config:
         )
         if not cfg.api_id:
             raise ConfigError("TG_API_ID is required")
+        if not 5 <= cfg.activity_extra_backfill_limit <= 10:
+            raise ConfigError("ACTIVITY_EXTRA_BACKFILL_LIMIT must be from 5 to 10")
         return cfg

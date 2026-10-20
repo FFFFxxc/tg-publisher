@@ -12,7 +12,7 @@ from pathlib import Path
 
 from telethon import TelegramClient, errors, functions, types, utils
 
-from .logic import parse_ref
+from .logic import canonical_ref, parse_ref
 from .networks import REACTION_SECONDS, load_settings, reaction_target
 
 log = logging.getLogger("activity")
@@ -127,6 +127,8 @@ class ActivityAccounts:
         self.clients[saved_id] = pending.client
         try:
             await self._resolve_activity_target(pending.client, me.id)
+            for ref in self._extra_targets():
+                await self._resolve_network_target(pending.client, ref, me.id)
             await self.db.set_activity_account_status(saved_id, "ready")
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"[:500]
@@ -225,8 +227,72 @@ class ActivityAccounts:
                 reacted += 1
                 if reacted >= limit:
                     break
+            for ref in self._extra_targets():
+                reacted += await self._react_extra_target(row, client, ref)
             await self.db.set_activity_account_status(row["id"], "ready")
             return reacted
+
+    def _extra_targets(self) -> list[str]:
+        primary = canonical_ref(self.cfg.destination)
+        targets = []
+        for raw in getattr(self.cfg, "activity_extra_targets", []) or []:
+            ref = canonical_ref(str(raw))
+            if ref != primary and ref not in targets:
+                targets.append(ref)
+        return targets
+
+    async def _react_extra_target(self, row: dict, client, ref: str) -> int:
+        """Join one configured channel, bootstrap recent posts, then follow every new post."""
+        entity = await self._resolve_network_target(client, ref, row["telegram_user_id"])
+        if isinstance(entity, types.User):
+            raise ValueError("Укажите канал или группу, а не личный аккаунт")
+
+        configured = getattr(self.cfg, "activity_reactions", None) or [self.cfg.activity_reaction]
+        if isinstance(entity, types.Channel):
+            full = await client(functions.channels.GetFullChannelRequest(entity))
+            allowed = getattr(full.full_chat, "available_reactions", None)
+            if isinstance(allowed, types.ChatReactionsNone):
+                raise ValueError("В канале отключены реакции")
+            if isinstance(allowed, types.ChatReactionsSome):
+                emojis = {r.emoticon for r in allowed.reactions if isinstance(r, types.ReactionEmoji)}
+                configured = [reaction for reaction in configured if reaction in emojis]
+
+        target_ref = str(getattr(entity, "id", ref))
+        cursor_key = f"activity_extra_cursor:{row['id']}:{target_ref}"
+        cursor = int(await self.db.kv_get(cursor_key, "0") or "0")
+        if cursor:
+            messages = await client.get_messages(entity, limit=None, min_id=cursor)
+        else:
+            messages = await client.get_messages(
+                entity, limit=int(getattr(self.cfg, "activity_extra_backfill_limit", 10)))
+
+        reacted = 0
+        for message in reversed(messages):
+            if not message:
+                continue
+            if getattr(message, "action", None) is not None:
+                await self.db.kv_set(cursor_key, str(message.id))
+                continue
+            if await self.db.activity_reacted(row["id"], target_ref, message.id):
+                await self.db.kv_set(cursor_key, str(message.id))
+                continue
+            results = getattr(getattr(message, "reactions", None), "results", []) or []
+            if any(getattr(result, "chosen_order", None) is not None for result in results):
+                await self.db.mark_activity_reacted(row["id"], target_ref, message.id)
+                await self.db.kv_set(cursor_key, str(message.id))
+                continue
+            reaction = self._next_reaction(row["id"] + ":" + target_ref, configured)
+            await client(functions.messages.SendReactionRequest(
+                peer=entity, msg_id=message.id,
+                reaction=[types.ReactionEmoji(emoticon=reaction)],
+                big=False, add_to_recent=False,
+            ))
+            await self.db.mark_activity_reacted(row["id"], target_ref, message.id)
+            await self.db.kv_set(cursor_key, str(message.id))
+            reacted += 1
+            if reacted < len(messages):
+                await asyncio.sleep(0.2)
+        return reacted
 
     def _next_reaction(self, account_id: str, available=None) -> str:
         configured = list(dict.fromkeys(available if available is not None else
@@ -319,7 +385,8 @@ class ActivityAccounts:
             return await self._resolve_activity_target(client, telegram_user_id)
         try:
             entity = await self._resolve(client, ref)
-            if isinstance(entity, types.Channel):
+            if (isinstance(entity, types.Channel) or getattr(entity, "broadcast", False)
+                    or getattr(entity, "megagroup", False)):
                 try:
                     await client(functions.channels.JoinChannelRequest(entity))
                 except errors.UserAlreadyParticipantError:
