@@ -14,7 +14,7 @@ export default async function AiPage() {
   }
   return (
     <div>
-      <PageHeader eyebrow="Автоматизация" title="Нейросеть" description="Настройте два независимых AI-сервиса, вручную выберите активный и проверьте каждый до публикации." />
+      <PageHeader eyebrow="Автоматизация" title="Нейросеть" description="До трёх моделей в каждом из двух профилей: бот переключается на запасные при ошибке или отказе. Выберите, с какого профиля начинать." />
       {error ? <ErrorBox message={error} /> : <AiForm initial={data} />}
     </div>
   );

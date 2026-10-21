@@ -8,10 +8,11 @@ type Config = {
   enabled: boolean;
   required: boolean;
   activeProfile: 1 | 2;
+  fallbackEnabled: boolean;
   baseUrl1: string;
-  model1: string;
+  models1: string[];
   baseUrl2: string;
-  model2: string;
+  models2: string[];
   prompt: string;
   timeout: number;
 };
@@ -24,6 +25,7 @@ type TestResult = {
   image_attached: boolean;
   elapsed_ms: number;
   post_id?: number;
+  attempts?: { profile: number; model: string; status: string; error_type?: string }[];
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,10 +35,11 @@ function initialConfig(initial: any): Config {
     enabled: !!initial?.ai_enabled,
     required: !!initial?.ai_required,
     activeProfile: Number(initial?.ai_active_profile) === 2 ? 2 : 1,
+    fallbackEnabled: initial?.ai_fallback_enabled !== false,
     baseUrl1: initial?.ai_base_url ?? "",
-    model1: initial?.ai_model ?? "",
+    models1: initial?.ai_models?.length ? initial.ai_models : [initial?.ai_model || ""],
     baseUrl2: initial?.ai_secondary_base_url ?? "",
-    model2: initial?.ai_secondary_model ?? "",
+    models2: initial?.ai_secondary_models?.length ? initial.ai_secondary_models : [initial?.ai_secondary_model || ""],
     prompt: initial?.ai_prompt ?? "",
     timeout: Number(initial?.ai_timeout ?? 40),
   };
@@ -107,10 +110,11 @@ export default function AiForm({ initial }: { initial: any }) {
           ai_enabled: config.enabled,
           ai_required: config.required,
           ai_active_profile: config.activeProfile,
+          ai_fallback_enabled: config.fallbackEnabled,
           ai_base_url: config.baseUrl1,
-          ai_model: config.model1,
+          ai_models: config.models1.map((model) => model.trim()).filter(Boolean),
           ai_secondary_base_url: config.baseUrl2,
-          ai_secondary_model: config.model2,
+          ai_secondary_models: config.models2.map((model) => model.trim()).filter(Boolean),
           ai_prompt: config.prompt,
           ai_timeout: Number(config.timeout),
           ...(newKeys[1].trim() ? { api_key: newKeys[1] } : {}),
@@ -167,14 +171,23 @@ export default function AiForm({ initial }: { initial: any }) {
 
   function profileCard(profile: 1 | 2) {
     const baseKey = profile === 1 ? "baseUrl1" : "baseUrl2";
-    const modelKey = profile === 1 ? "model1" : "model2";
+    const modelKey = profile === 1 ? "models1" : "models2";
+    const models = config[modelKey];
     const result = testResults[profile];
     const testError = testErrors[profile];
     return (
-      <Card key={profile} title={`Профиль ${profile}`} description={profile === 1 ? "Основной AI-сервис." : "Второй независимый AI-сервис. Он не включается автоматически при ошибке первого."} className={config.activeProfile === profile ? "ring-1 ring-teal-400/40" : ""}>
+      <Card key={profile} title={`Профиль ${profile}`} description="Один API-сервис и до трёх моделей. Модели проверяются сверху вниз." className={config.activeProfile === profile ? "ring-1 ring-teal-400/40" : ""}>
         <div className="space-y-4">
           <label className="field-label">Адрес API<input type="url" value={config[baseKey]} onChange={(e) => update(baseKey, e.target.value)} placeholder="https://api.openai.com/v1" className={INPUT} /><span className="field-help">При смене адреса необходимо снова ввести ключ этого профиля.</span></label>
-          <label className="field-label">Модель<input value={config[modelKey]} onChange={(e) => update(modelKey, e.target.value)} placeholder="gpt-4o-mini" className={INPUT} /></label>
+          <fieldset className="space-y-2"><legend className="mb-2 text-xs font-semibold text-slate-300">Модели по порядку проверки</legend>
+            {models.map((model, index) => <div key={index} className="flex items-center gap-2">
+              <label className="field-label min-w-0 flex-1">{index === 0 ? "Основная модель" : `Запасная модель ${index}`}<input value={model} maxLength={200} onChange={(e) => update(modelKey, models.map((value, i) => i === index ? e.target.value : value))} placeholder="Точное название модели у сервиса" className={INPUT} /></label>
+              <button type="button" aria-label={`Поднять модель ${index + 1} профиля ${profile}`} disabled={index === 0} onClick={() => { const next = [...models]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(modelKey, next); }} className="button-secondary mt-5 disabled:opacity-30">↑</button>
+              <button type="button" aria-label={`Удалить модель ${index + 1} профиля ${profile}`} disabled={models.length === 1} onClick={() => update(modelKey, models.filter((_, i) => i !== index))} className="button-secondary mt-5 disabled:opacity-30">×</button>
+            </div>)}
+            <button type="button" disabled={models.length >= 3} onClick={() => update(modelKey, [...models, ""])} className="button-secondary disabled:opacity-30">Добавить запасную модель</button>
+            <p className="field-help">До 3 моделей на один API-ключ. При ошибке, пустом ответе или отказе бот пробует следующую модель.</p>
+          </fieldset>
           <label className="field-label">API-ключ<input type="password" autoComplete="new-password" value={newKeys[profile]} disabled={clearKeys[profile]} onChange={(e) => setNewKeys((current) => ({ ...current, [profile]: e.target.value }))} placeholder={keys[profile].configured ? "Оставьте пустым, чтобы сохранить текущий" : "Вставьте API-ключ"} className={INPUT} /></label>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className={keys[profile].configured ? "text-emerald-300" : "text-amber-300"}>{keys[profile].configured ? <>Ключ сохранён: <span className="font-mono">{keys[profile].mask || "••••"}</span></> : "Ключ не задан"}</span>
@@ -185,7 +198,7 @@ export default function AiForm({ initial }: { initial: any }) {
             {dirty && <p className="mt-2 text-xs text-amber-300">Сначала сохраните изменения — тест всегда использует сохранённые настройки.</p>}
             {!dirty && !keys[profile].configured && <p className="mt-2 text-xs text-amber-300">Сначала добавьте и сохраните ключ.</p>}
             {testError && <div role="alert" className="mt-3 rounded-lg border border-red-500/25 bg-red-950/30 p-3 text-xs text-red-200">{testError}</div>}
-            {result && <div role="status" className="mt-3 rounded-lg border border-emerald-500/25 bg-emerald-950/25 p-3 text-xs text-emerald-100"><div className="flex flex-wrap gap-2"><Badge v="completed">Профиль {result.profile}</Badge><span>{result.model}</span><span>{result.elapsed_ms} мс</span>{result.image_attached && <span>· изображение приложено</span>}</div><div className="mt-3 whitespace-pre-wrap leading-5 text-slate-200">{result.reply}</div></div>}
+            {result && <div role="status" className="mt-3 rounded-lg border border-emerald-500/25 bg-emerald-950/25 p-3 text-xs text-emerald-100"><div className="flex flex-wrap gap-2"><Badge v="completed">Профиль {result.profile}</Badge><span>{result.model}</span><span>{result.elapsed_ms} мс</span>{result.image_attached && <span>· изображение приложено</span>}</div><div className="mt-3 whitespace-pre-wrap leading-5 text-slate-200">{result.reply}</div>{result.attempts && <ul className="mt-3 space-y-1 text-slate-400">{result.attempts.map((attempt, index) => <li key={index}>{attempt.model}: {attempt.status === "completed" ? "ответ получен" : "ошибка — проверена следующая модель"}</li>)}</ul>}</div>}
           </div>
         </div>
       </Card>
@@ -198,15 +211,16 @@ export default function AiForm({ initial }: { initial: any }) {
         <div className="grid gap-4 md:grid-cols-2">
           <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-950/25 p-4 text-sm text-slate-200"><input className="mt-0.5 accent-teal-500" type="checkbox" checked={config.enabled} onChange={(e) => update("enabled", e.target.checked)} /><span><b className="block">Использовать нейросеть</b><span className="mt-1 block text-xs leading-5 text-slate-400">Бот улучшает подпись перед публикацией.</span></span></label>
           <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-950/25 p-4 text-sm text-slate-200"><input className="mt-0.5 accent-teal-500" type="checkbox" checked={config.required} onChange={(e) => update("required", e.target.checked)} /><span><b className="block">Не публиковать при ошибке AI</b><span className="mt-1 block text-xs leading-5 text-slate-400">Защищает канал от публикации исходного текста, если AI не ответил.</span></span></label>
-          <fieldset className="rounded-xl border border-slate-700/50 bg-slate-950/25 p-4 md:col-span-2"><legend className="px-1 text-xs font-semibold text-slate-300">Активный профиль</legend><div className="mt-1 flex flex-wrap gap-3">{([1, 2] as const).map((profile) => <label key={profile} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 text-sm ${config.activeProfile === profile ? "border-teal-400/40 bg-teal-500/10 text-teal-100" : "border-slate-700/50 text-slate-400"}`}><input type="radio" name="active-profile" checked={config.activeProfile === profile} onChange={() => update("activeProfile", profile)} />Профиль {profile}</label>)}</div><p className="mt-2 text-xs text-slate-500">Бот использует только выбранный профиль. Автоматического переключения между профилями нет.</p></fieldset>
-          <label className="field-label">Максимальное время ответа, секунд<input type="number" min={5} max={300} value={config.timeout} onChange={(e) => update("timeout", Number(e.target.value))} className={INPUT} /><span className="field-help">От 5 до 300 секунд.</span></label>
+          <fieldset className="rounded-xl border border-slate-700/50 bg-slate-950/25 p-4 md:col-span-2"><legend className="px-1 text-xs font-semibold text-slate-300">С какого профиля начинать</legend><div className="mt-1 flex flex-wrap gap-3">{([1, 2] as const).map((profile) => <label key={profile} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 text-sm ${config.activeProfile === profile ? "border-teal-400/40 bg-teal-500/10 text-teal-100" : "border-slate-700/50 text-slate-400"}`}><input type="radio" name="active-profile" checked={config.activeProfile === profile} onChange={() => update("activeProfile", profile)} />Профиль {profile}</label>)}</div><p className="mt-2 text-xs text-slate-400">Сначала модели выбранного профиля сверху вниз, затем модели второго. Для каждой публикации порядок начинается заново; первый успешный ответ завершает проверку.</p></fieldset>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700/50 bg-slate-950/25 p-4 md:col-span-2 text-sm text-slate-200"><input type="checkbox" className="mt-1 accent-teal-500" checked={config.fallbackEnabled} onChange={(e) => update("fallbackEnabled", e.target.checked)} /><span><b className="block">Автоматически пробовать запасные модели и второй профиль</b><span className="field-help">При ошибке подключения, лимите, пустом ответе или отказе. Отключённая опция оставляет только первую модель выбранного профиля. Используются лишь указанные вами модели; тарифы определяет AI-сервис.</span></span></label>
+          <label className="field-label">Лимит времени одной попытки, секунд<input type="number" min={5} max={300} value={config.timeout} onChange={(e) => update("timeout", Number(e.target.value))} className={INPUT} /><span className="field-help">От 5 до 300 секунд. Вся цепочка ограничена 5 минутами: при большом лимите время делится между моделями. Ошибка всех вариантов обрабатывается настройкой «Не публиковать при ошибке AI».</span></label>
           <label className="field-label md:col-span-2">Инструкция для нейросети<textarea rows={6} value={config.prompt} onChange={(e) => update("prompt", e.target.value)} className={INPUT} /><span className="field-help">Опишите стиль, длину и правила для новых подписей.</span></label>
         </div>
       </Card>
 
       <div className="grid gap-5 xl:grid-cols-2">{profileCard(1)}{profileCard(2)}</div>
 
-      <Card title="Данные для проверки" description="Проверка ничего не публикует и не меняет активный профиль. Можно добавить номер поста, чтобы проверить распознавание реального изображения.">
+      <Card title="Данные для проверки" description="Проверка ничего не публикует и не меняет активный профиль. Кнопка проверяет только модели своего профиля, чтобы ошибка не скрывалась ответом другого сервиса. Можно добавить номер поста для проверки изображения.">
         <div className="grid gap-4 md:grid-cols-[1fr_220px]">
           <label className="field-label">Пробный текст<input value={testText} onChange={(e) => setTestText(e.target.value)} className={INPUT} /></label>
           <label className="field-label">Номер поста с изображением <span className="field-help">Необязательно</span><input type="number" min={1} step={1} value={testPostId} onChange={(e) => setTestPostId(e.target.value)} placeholder="Например: 42" className={INPUT} /></label>
