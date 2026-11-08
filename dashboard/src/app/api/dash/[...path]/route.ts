@@ -6,6 +6,7 @@ type Ctx = { params: { path: string[] } };
 /** Белый список под-путей Control API, доступных панели. Метод зафиксирован. */
 const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "GET", re: /^overview$/ },
+  { method: "GET", re: /^telegram-schedule$/ },
   { method: "POST", re: /^overview\/next-post\/replace$/ },
   { method: "GET", re: /^overview\/destination-avatar$/ },
   { method: "GET", re: /^sources$/ },

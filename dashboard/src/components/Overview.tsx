@@ -5,6 +5,7 @@ import ActionButton from "@/components/ActionButton";
 import MediaPreview from "@/components/MediaPreview";
 import { Card, Dot, Notice, Stat, humanLabel } from "@/components/ui";
 import { cleanPostText, excerpt, fmtAge, fmtDate } from "@/lib/format";
+import { nativeScheduleNotice } from "@/lib/nativeSchedule";
 
 const PROCESS_COLORS: Record<string, string> = {
   green: "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,.1)]",
@@ -70,7 +71,16 @@ export default function Overview({ initial }: { initial: any }) {
     const t = setInterval(async () => {
       try {
         const r = await fetch("/api/dash/overview");
-        if (r.ok) { setD(await r.json()); setErr(""); } else setErr(`Control API ${r.status}`);
+        if (r.ok) {
+          const data = await r.json();
+          if (data.telegram_schedule?.enabled) {
+            try {
+              const guard = await fetch("/api/dash/telegram-schedule");
+              if (guard.ok) data.telegram_schedule = await guard.json();
+            } catch { /* Keep the overview snapshot if only the status refresh fails. */ }
+          }
+          setD(data); setErr("");
+        } else setErr(`Control API ${r.status}`);
       } catch { setErr("нет связи"); }
     }, 15000);
     return () => clearInterval(t);
@@ -94,11 +104,19 @@ export default function Overview({ initial }: { initial: any }) {
   }
 
   const w = d?.worker ?? {}, sched = d?.schedule ?? {}, next = d?.next_post;
+  const nativeNotice = nativeScheduleNotice(d?.telegram_schedule);
   const postText = useMemo(() => cleanPostText(next?.text, next?.source_ref), [next]);
 
   if (!d) return null;
   return <div className="space-y-4">
     {err && <Notice tone="warning">Не удалось обновить данные: {err}. Показаны последние полученные значения.</Notice>}
+    {nativeNotice && <Notice tone={nativeNotice.tone}>
+      <strong className="block text-sm">{nativeNotice.title}</strong>
+      <span className="mt-1 block leading-5">{nativeNotice.detail}</span>
+      {d.telegram_schedule?.last_scheduled_at && <span className="mt-1 block">
+        Последний пост в отложке: {fmtDate(d.telegram_schedule.last_scheduled_at)}
+      </span>}
+    </Notice>}
 
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Stat label="Бот" value={<span className="flex items-center gap-2"><Dot ok={!!w.online} />{w.online ? "Работает" : "Не отвечает"}</span>} hint={`Версия ${w.version ?? "не определена"}`} tone={w.online ? "good" : "warn"} />
@@ -118,7 +136,7 @@ export default function Overview({ initial }: { initial: any }) {
           <div className="min-w-0 space-y-2 text-sm text-slate-300">
             <div className="flex flex-wrap items-center gap-2"><b title={next.kind === "old" ? "Архив ранжируется по количеству реакций" : "Итоговый рейтинг относительно средних просмотров и вовлечённости этого источника"} className="text-lg text-sky-300">{next.kind === "old" ? "Реакции" : "Score"} {next.score != null ? Number(next.score).toFixed(next.kind === "old" ? 0 : 2) : "—"}</b><span className="text-xs text-slate-500">{humanLabel(next.media_type)}</span></div>
             <p className="line-clamp-4 text-slate-300">{excerpt(postText, 260) || "Публикация без подписи"}</p>
-            <div className="text-xs text-slate-500">{next.source_title || next.source_ref || "Архив канала"} · {next.scheduled_at ? `назначено на ${fmtDate(next.scheduled_at)}` : `следующий слот ${fmtDate(sched.next_slot)}`}</div>
+            <div className="text-xs text-slate-500">{next.source_title || next.source_ref || "Архив канала"} · {nativeNotice?.waiting ? "ожидает освобождения отложки и следующего свободного слота" : next.scheduled_at ? `назначено на ${fmtDate(next.scheduled_at)}` : `следующий слот ${fmtDate(sched.next_slot)}`}</div>
             <a href={next.post_url} className="text-xs text-sky-400 hover:text-sky-300">Открыть публикацию →</a>
           </div>
         </div> : <div className="text-sm text-slate-400">Подходящего материала пока нет.</div>}
