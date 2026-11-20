@@ -52,12 +52,12 @@ export default async function OwnPostsPage({searchParams}: {searchParams: Record
               {items.map((o) => (
                 <tr key={o.group_key}>
                   <Td><div className="space-y-2"><MediaPreview postId={o.group_key} thumbnail src={`/api/dash/own/preview?group_key=${encodeURIComponent(o.group_key)}`} /><Badge v={o.media_type || "unknown"}/></div></Td>
-                  <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(o.post_date)}</Td>
+                  <Td className="whitespace-nowrap text-xs text-subtle">{fmtDate(o.post_date)}</Td>
                   <Td>{o.reactions ?? 0}</Td>
                   <Td>{o.views ?? 0}</Td>
                   <Td>{o.forwards ?? 0}</Td>
-                  <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(o.last_reposted_at)}</Td>
-                  <Td className="max-w-[280px] text-xs text-zinc-400">{excerpt(o.text)}</Td>
+                  <Td className="whitespace-nowrap text-xs text-subtle">{fmtDate(o.last_reposted_at)}</Td>
+                  <Td className="max-w-[280px] text-xs text-muted">{excerpt(o.text)}</Td>
                   <Td>
                     <RepostButton groupKey={o.group_key} />
                   </Td>
@@ -67,7 +67,7 @@ export default async function OwnPostsPage({searchParams}: {searchParams: Record
           </table>
         </div>
       )}
-      <p className="text-xs text-zinc-500">
+      <p className="text-xs text-subtle">
         Материалы отсортированы по реакциям. Повторная публикация проходит через обычную очередь и сохраняет защиту от дублей.
       </p>
     </div>

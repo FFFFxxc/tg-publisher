@@ -77,7 +77,7 @@ export default function ActivityLoginForm() {
         </button>
         {step !== "phone" && <button type="button" className="button-secondary" onClick={() => { setStep("phone"); setToken(""); setError(""); }}>Назад</button>}
       </div>
-      {(message || error) && <div role="status" className={`sm:col-span-2 text-xs ${error ? "text-red-300" : "text-emerald-300"}`}>{error || message}</div>}
+      {(message || error) && <div role="status" className={`sm:col-span-2 text-xs ${error ? "text-danger" : "text-success"}`}>{error || message}</div>}
       <span className="field-help sm:col-span-2">Номер и код используются только во время входа. После авторизации сохраняется отдельная Telethon-сессия в закрытом томе приложения.</span>
     </form>
   );

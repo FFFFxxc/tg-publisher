@@ -19,7 +19,7 @@ export default async function PostDetailPage({ params }: { params: { id: string 
   if (error || !data?.post) {
     return (
       <div className="space-y-4">
-        <Link href="/queue" className="text-sm text-sky-400 hover:underline">
+        <Link href="/queue" className="text-sm text-info hover:underline">
           ← Вернуться в очередь
         </Link>
         <ErrorBox message={error || "пост не найден"} />
@@ -34,7 +34,7 @@ export default async function PostDetailPage({ params }: { params: { id: string 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <Link href="/queue" className="text-sm text-sky-300 hover:underline">
+        <Link href="/queue" className="text-sm text-info hover:underline">
           ← Вернуться в очередь
         </Link>
         <PostRowActions p={p} />
@@ -63,21 +63,21 @@ export default async function PostDetailPage({ params }: { params: { id: string 
             ["Последняя ошибка", p.last_error ?? "—"],
           ].map(([k, v]) => (
             <div key={k}>
-              <div className="text-xs text-zinc-500">{k}</div>
-              <div className="break-words text-zinc-300">{v}</div>
+              <div className="text-xs text-subtle">{k}</div>
+              <div className="break-words text-muted">{v}</div>
             </div>
           ))}
         </div>
         <div className="mt-3">
-          <div className="text-xs text-zinc-500">Текст</div>
-          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-zinc-800 bg-zinc-900/60 p-2 text-sm text-zinc-300">
+          <div className="text-xs text-subtle">Текст</div>
+          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-line bg-tint p-2 text-sm text-muted">
             {cleanPostText(p.text, p.source_ref) || "Публикация без текста"}
           </pre>
         </div>
         {p.ai_caption && (
           <div className="mt-3">
-            <div className="text-xs text-zinc-500">Текст, созданный AI {p.ai_error ? `· ошибка: ${p.ai_error}` : ""}</div>
-            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-zinc-800 bg-zinc-900/60 p-2 text-sm text-emerald-300">
+            <div className="text-xs text-subtle">Текст, созданный AI {p.ai_error ? `· ошибка: ${p.ai_error}` : ""}</div>
+            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-line bg-tint p-2 text-sm text-success">
               {p.ai_caption}
             </pre>
           </div>
@@ -86,7 +86,7 @@ export default async function PostDetailPage({ params }: { params: { id: string 
 
       <Card title="История публикации">
         {events.length === 0 ? (
-          <div className="text-sm text-zinc-500">нет событий</div>
+          <div className="text-sm text-subtle">нет событий</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -101,12 +101,12 @@ export default async function PostDetailPage({ params }: { params: { id: string 
               <tbody>
                 {events.map((e) => (
                   <tr key={e.id}>
-                    <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(e.created_at)}</Td>
+                    <Td className="whitespace-nowrap text-xs text-subtle">{fmtDate(e.created_at)}</Td>
                     <Td>
                       <Badge v={e.level} />
                     </Td>
-                    <Td className="text-xs"><div>{humanLabel(e.type)}</div><div className="font-mono text-[10px] text-slate-600">{e.type}</div></Td>
-                    <Td className="text-xs text-zinc-400">{e.message}</Td>
+                    <Td className="text-xs"><div>{humanLabel(e.type)}</div><div className="font-mono text-[10px] text-subtle">{e.type}</div></Td>
+                    <Td className="text-xs text-muted">{e.message}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -117,17 +117,17 @@ export default async function PostDetailPage({ params }: { params: { id: string 
 
       <Card title="Запущенные команды">
         {actions.length === 0 ? (
-          <div className="text-sm text-zinc-500">нет действий</div>
+          <div className="text-sm text-subtle">нет действий</div>
         ) : (
           <div className="space-y-1.5">
             {actions.map((a) => (
               <div key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
                 <Badge v={a.status === "pending" ? "pending_action" : a.status} />
-                <span className="text-xs text-zinc-300">{humanLabel(a.kind)}</span>
-                <span className="text-xs text-zinc-500">{fmtDate(a.created_at)}</span>
-                {a.error && <span className="text-xs text-red-400">{a.error}</span>}
+                <span className="text-xs text-muted">{humanLabel(a.kind)}</span>
+                <span className="text-xs text-subtle">{fmtDate(a.created_at)}</span>
+                {a.error && <span className="text-xs text-danger">{a.error}</span>}
                 {a.result && (
-                  <span className="text-xs text-zinc-500">{JSON.stringify(a.result).slice(0, 200)}</span>
+                  <span className="text-xs text-subtle">{JSON.stringify(a.result).slice(0, 200)}</span>
                 )}
               </div>
             ))}

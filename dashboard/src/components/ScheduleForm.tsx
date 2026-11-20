@@ -66,13 +66,13 @@ export default function ScheduleForm({ initial }: { initial: any }) {
   return (
     <div className="space-y-4">
       <Card title="Следующая публикация" description="Текущий план по сохранённым настройкам.">
-        <div className="grid gap-3 text-sm text-slate-300 sm:grid-cols-3">
+        <div className="grid gap-3 text-sm text-muted sm:grid-cols-3">
           <div>
-            <div className="text-xs text-slate-500">Дата и время</div>
+            <div className="text-xs text-subtle">Дата и время</div>
             <b className="mt-1 block">{initial?.next_slot ? fmtDate(initial.next_slot) : "Не запланирована"}</b>
           </div>
-          <div><div className="text-xs text-slate-500">Материал</div><b className="mt-1 block">{initial?.next_kind === "old" ? "Лучший пост из архива" : initial?.next_kind === "parsed" ? "Новый пост из источников" : "Не определён"}</b></div>
-          <div><div className="text-xs text-slate-500">Шаг последовательности</div><b className="mt-1 block">{(initial?.pattern_index ?? 0) + 1}</b></div>
+          <div><div className="text-xs text-subtle">Материал</div><b className="mt-1 block">{initial?.next_kind === "old" ? "Лучший пост из архива" : initial?.next_kind === "parsed" ? "Новый пост из источников" : "Не определён"}</b></div>
+          <div><div className="text-xs text-subtle">Шаг последовательности</div><b className="mt-1 block">{(initial?.pattern_index ?? 0) + 1}</b></div>
         </div>
       </Card>
 
@@ -99,11 +99,11 @@ export default function ScheduleForm({ initial }: { initial: any }) {
             </select>
             <span className="field-help">Бот повторяет выбранный порядок по кругу. Если нужного материала нет, он попробует другой тип.</span>
           </label>
-          <label className="flex min-h-20 items-start gap-3 rounded-xl border border-slate-700/60 bg-slate-950/30 p-4 text-sm text-slate-200">
-            <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} className="mt-0.5 h-4 w-4 accent-teal-500" />
-            <span><b className="block">Приостановить автопубликацию</b><span className="mt-1 block text-xs leading-5 text-slate-400">Бот продолжит проверять источники и собирать материалы, но не будет публиковать их.</span></span>
+          <label className="flex min-h-20 items-start gap-3 rounded-xl border border-line bg-tint p-4 text-sm text-ink">
+            <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} className="mt-0.5 h-4 w-4 accent-accent" />
+            <span><b className="block">Приостановить автопубликацию</b><span className="mt-1 block text-xs leading-5 text-muted">Бот продолжит проверять источники и собирать материалы, но не будет публиковать их.</span></span>
           </label>
-          <div className="md:col-span-2 mt-1 border-t border-slate-700/40 pt-5"><h3 className="text-sm font-semibold text-slate-100">Правила отбора</h3><p className="mt-1 text-xs text-slate-400">Настройте свежесть и качество материалов. Текущие значения подходят для большинства каналов.</p></div>
+          <div className="md:col-span-2 mt-1 border-t border-line pt-5"><h3 className="text-sm font-semibold text-ink">Правила отбора</h3><p className="mt-1 text-xs text-muted">Настройте свежесть и качество материалов. Текущие значения подходят для большинства каналов.</p></div>
           {FIELDS.map(([k, label, help]) => (
             <label key={k} className="field-label">
               {label}
@@ -117,29 +117,29 @@ export default function ScheduleForm({ initial }: { initial: any }) {
               <span className="field-help">{help}</span>
             </label>
           ))}
-          <div className="flex flex-wrap items-center gap-3 border-t border-slate-700/40 pt-5 md:col-span-2">
+          <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5 md:col-span-2">
             <button
               disabled={busy}
               className="button-primary disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy ? "Сохраняем…" : "Сохранить расписание"}
             </button>
-            {msg && <span role="status" className="text-xs text-emerald-300">{msg}</span>}
-            {err && <span role="alert" className="text-xs text-red-300">{err}</span>}
+            {msg && <span role="status" className="text-xs text-success">{msg}</span>}
+            {err && <span role="alert" className="text-xs text-danger">{err}</span>}
           </div>
         </form>
       </Card>
       <Card title="Как бот выбирает посты" description="Сбор материалов и выбор публикации — разные этапы.">
-        <div className="space-y-4 text-sm leading-7 text-slate-300">
-          <p><b className="text-white">1. Сбор.</b> Раз в {nums.collect_interval} секунд бот читает новые сообщения подключённых источников. Альбом считается одним постом. На этом этапе рейтинг не отсекает материалы: они появляются в очереди. Перед автоматическим выбором бот обновляет их просмотры и реакции.</p>
-          <p><b className="text-white">2. Свежесть.</b> Для обычной автопубликации новый пост должен быть не моложе {nums.candidate_min_age_min} минут и не старше {nums.max_post_age_hours} часов. Слишком свежий ещё набирает активность; слишком старый выходит из отбора.</p>
-          {nums.max_post_age_hours > nums.baseline_days * 24 && <p className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-amber-200">Важно: текущий алгоритм рассчитывает рейтинг только внутри периода сравнения. Поэтому фактическая верхняя граница отбора сейчас {nums.baseline_days * 24} часов ({nums.baseline_days} дней), даже если максимальный возраст задан больше.</p>}
-          <p><b className="text-white">3. Активность.</b> ER = (реакции + 3 × репосты + 2 × комментарии) / просмотры. Репост весит втрое больше реакции, комментарий — вдвое. Для альбома реакции складываются, а просмотры, репосты и комментарии берутся по максимальному значению сообщения. При нуле просмотров делитель равен 1.</p>
-          <div className="rounded-xl border border-teal-500/25 bg-teal-500/5 p-4"><b className="text-teal-300">Рейтинг = 0,6 × (ER поста / средний ER источника) + 0,4 × (просмотры поста / средние просмотры источника)</b><p className="mt-2">Каждый канал сравнивается только с самим собой: среди собранных ботом новых постов за {nums.baseline_days} дней, включая уже опубликованные и пропущенные. Это не проценты и не число лайков. Рейтинг 1 — уровень средних показателей; 1,5 — выше среднего. При нулевом среднем соответствующая часть получает нейтральное значение 0,6 или 0,4.</p></div>
-          <p><b className="text-white">Пример.</b> 1000 просмотров, 30 реакций, 10 репостов и 5 комментариев дают ER = (30 + 30 + 10) / 1000 = 7%. Если у источника средний ER 5%, а средние просмотры 800, рейтинг = 0,6 × 1,4 + 0,4 × 1,25 = <b>1,34</b>.</p>
-          <p><b className="text-white">4. Выбор.</b> В нужный слот бот берёт максимальный рейтинг среди подходящих новых постов, если он не ниже {nums.best_min_score}. Если подходящего нового поста нет, он пробует архив, и наоборот. Повторы после технических ошибок получают приоритет перед новым отбором. Фото и видео оцениваются одной формулой; фильтр формата на сайте не меняет автопубликацию.</p>
-          <p><b className="text-white">Архив.</b> Здесь другая логика: пост должен быть старше {nums.own_min_age_days} дней, а предыдущий повтор — старше {nums.repost_cooldown_days} дней. Сначала бот выбирает посты, которые ещё не использовал для повторов. Когда они закончатся — те, которые повторялись давнее всего. При равном приоритете сравниваются реакции, затем репосты. ER и просмотры архивный порядок не определяют. Защита от слишком ранних повторов сохраняется.</p>
-          <p><b className="text-white">Ручной выбор.</b> «Опубликовать» и личная дата/время обходят автоматический порог рейтинга и возрастной отбор. Защита отправки, проверка дублей и фильтр рекламы остаются. Общая пауза действует на запланированные публикации.</p>
+        <div className="space-y-4 text-sm leading-7 text-muted">
+          <p><b className="text-ink">1. Сбор.</b> Раз в {nums.collect_interval} секунд бот читает новые сообщения подключённых источников. Альбом считается одним постом. На этом этапе рейтинг не отсекает материалы: они появляются в очереди. Перед автоматическим выбором бот обновляет их просмотры и реакции.</p>
+          <p><b className="text-ink">2. Свежесть.</b> Для обычной автопубликации новый пост должен быть не моложе {nums.candidate_min_age_min} минут и не старше {nums.max_post_age_hours} часов. Слишком свежий ещё набирает активность; слишком старый выходит из отбора.</p>
+          {nums.max_post_age_hours > nums.baseline_days * 24 && <p className="rounded-xl border border-warning-line bg-warning-tint p-3 text-warning">Важно: текущий алгоритм рассчитывает рейтинг только внутри периода сравнения. Поэтому фактическая верхняя граница отбора сейчас {nums.baseline_days * 24} часов ({nums.baseline_days} дней), даже если максимальный возраст задан больше.</p>}
+          <p><b className="text-ink">3. Активность.</b> ER = (реакции + 3 × репосты + 2 × комментарии) / просмотры. Репост весит втрое больше реакции, комментарий — вдвое. Для альбома реакции складываются, а просмотры, репосты и комментарии берутся по максимальному значению сообщения. При нуле просмотров делитель равен 1.</p>
+          <div className="rounded-xl border border-line-strong bg-selected p-4"><b className="text-accent">Рейтинг = 0,6 × (ER поста / средний ER источника) + 0,4 × (просмотры поста / средние просмотры источника)</b><p className="mt-2">Каждый канал сравнивается только с самим собой: среди собранных ботом новых постов за {nums.baseline_days} дней, включая уже опубликованные и пропущенные. Это не проценты и не число лайков. Рейтинг 1 — уровень средних показателей; 1,5 — выше среднего. При нулевом среднем соответствующая часть получает нейтральное значение 0,6 или 0,4.</p></div>
+          <p><b className="text-ink">Пример.</b> 1000 просмотров, 30 реакций, 10 репостов и 5 комментариев дают ER = (30 + 30 + 10) / 1000 = 7%. Если у источника средний ER 5%, а средние просмотры 800, рейтинг = 0,6 × 1,4 + 0,4 × 1,25 = <b>1,34</b>.</p>
+          <p><b className="text-ink">4. Выбор.</b> В нужный слот бот берёт максимальный рейтинг среди подходящих новых постов, если он не ниже {nums.best_min_score}. Если подходящего нового поста нет, он пробует архив, и наоборот. Повторы после технических ошибок получают приоритет перед новым отбором. Фото и видео оцениваются одной формулой; фильтр формата на сайте не меняет автопубликацию.</p>
+          <p><b className="text-ink">Архив.</b> Здесь другая логика: пост должен быть старше {nums.own_min_age_days} дней, а предыдущий повтор — старше {nums.repost_cooldown_days} дней. Сначала бот выбирает посты, которые ещё не использовал для повторов. Когда они закончатся — те, которые повторялись давнее всего. При равном приоритете сравниваются реакции, затем репосты. ER и просмотры архивный порядок не определяют. Защита от слишком ранних повторов сохраняется.</p>
+          <p><b className="text-ink">Ручной выбор.</b> «Опубликовать» и личная дата/время обходят автоматический порог рейтинга и возрастной отбор. Защита отправки, проверка дублей и фильтр рекламы остаются. Общая пауза действует на запланированные публикации.</p>
         </div>
       </Card>
     </div>

@@ -40,7 +40,7 @@ export default async function AccountsPage() {
         <Td className="font-mono text-xs">{a.telegram_user_id}</Td>
         <Td><Badge v={a.enabled && a.status === "ready" ? "published" : a.status === "error" ? "error" : "skipped"}>
           {!a.enabled ? "Отключён" : a.status === "ready" ? "Готов" : "Ошибка"}
-        </Badge>{a.last_error && <div className="mt-2 max-w-[260px] text-xs text-red-300">{a.last_error}</div>}</Td>
+        </Badge>{a.last_error && <div className="mt-2 max-w-[260px] text-xs text-danger">{a.last_error}</div>}</Td>
         <Td className="text-xs">{fmtDate(a.last_active_at)}</Td>
         <Td><div className="flex flex-wrap gap-2">
           <ActionButton path={`activity-accounts/${a.id}`} method="PATCH" body={{ enabled: !a.enabled }}

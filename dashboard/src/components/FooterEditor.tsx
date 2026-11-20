@@ -60,8 +60,8 @@ export default function FooterEditor({ initial }: { initial: any }) {
       <Card title="Строки подписи" description="Перетаскивание пока не требуется: меняйте порядок кнопками со стрелками. Каждая строка может быть ссылкой.">
         <div className="space-y-3">
           {items.map((it, i) => (
-            <div key={i} className="rounded-xl border border-slate-700/50 bg-slate-950/25 p-4">
-              <div className="mb-3 text-xs font-semibold text-slate-400">Строка {i + 1}</div>
+            <div key={i} className="rounded-xl border border-line bg-tint p-4">
+              <div className="mb-3 text-xs font-semibold text-muted">Строка {i + 1}</div>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[100px_1fr_1fr_auto]">
                 <label className="field-label">Эмодзи
                 <input
@@ -105,10 +105,10 @@ export default function FooterEditor({ initial }: { initial: any }) {
       </Card>
 
       <Card title="Предпросмотр" description="Так текст будет выглядеть в конце сообщения. Ссылки в предпросмотре не открываются.">
-        <pre className="min-h-24 whitespace-pre-wrap rounded-xl border border-slate-700/50 bg-slate-950/50 p-4 text-sm leading-6 text-slate-200">
+        <pre className="min-h-24 whitespace-pre-wrap rounded-xl border border-line bg-tint p-4 text-sm leading-6 text-ink">
           {preview || "—"}
         </pre>
-        <p className="mt-2 text-xs text-zinc-500">
+        <p className="mt-2 text-xs text-subtle">
           Бот автоматически подготовит ссылки и премиум-эмодзи. Если подпись уже есть в исходном посте, второй раз она не добавится.
         </p>
       </Card>
@@ -121,8 +121,8 @@ export default function FooterEditor({ initial }: { initial: any }) {
         >
           {busy ? "Сохраняем…" : "Сохранить подпись"}
         </button>
-        {msg && <span className="text-xs text-emerald-400">{msg}</span>}
-        {err && <span className="text-xs text-red-400">{err}</span>}
+        {msg && <span className="text-xs text-success">{msg}</span>}
+        {err && <span className="text-xs text-danger">{err}</span>}
       </div>
     </div>
   );

@@ -104,15 +104,15 @@ export default async function ActivityPage({ searchParams }: { searchParams: SP 
             <tbody>
               {items.map((e) => (
                 <tr key={e.id}>
-                  <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(e.created_at)}</Td>
+                  <Td className="whitespace-nowrap text-xs text-subtle">{fmtDate(e.created_at)}</Td>
                   <Td>
                     <Badge v={e.level} />
                   </Td>
-                  <Td className="whitespace-nowrap text-xs"><div className="font-medium text-slate-300">{humanLabel(e.type)}</div><div className="mt-0.5 font-mono text-[10px] text-slate-600">{e.type}</div></Td>
-                  <Td className="max-w-[360px] text-xs text-zinc-400">{excerpt(e.message, 200)}</Td>
+                  <Td className="whitespace-nowrap text-xs"><div className="font-medium text-muted">{humanLabel(e.type)}</div><div className="mt-0.5 font-mono text-[10px] text-subtle">{e.type}</div></Td>
+                  <Td className="max-w-[360px] text-xs text-muted">{excerpt(e.message, 200)}</Td>
                   <Td>
                     {e.post_id ? (
-                      <Link href={`/queue/${e.post_id}`} className="text-sky-400 hover:underline">
+                      <Link href={`/queue/${e.post_id}`} className="text-info hover:underline">
                         {e.post_id}
                       </Link>
                     ) : (
@@ -120,7 +120,7 @@ export default async function ActivityPage({ searchParams }: { searchParams: SP 
                     )}
                   </Td>
                   <Td>{e.source_id ?? "—"}</Td>
-                  <Td className="max-w-[240px] break-words text-xs text-zinc-600">
+                  <Td className="max-w-[240px] break-words text-xs text-subtle">
                     {e.metadata && Object.keys(e.metadata).length > 0
                       ? JSON.stringify(e.metadata).slice(0, 160)
                       : ""}
@@ -133,7 +133,7 @@ export default async function ActivityPage({ searchParams }: { searchParams: SP 
       )}
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-subtle">
           Событий: {total} · Страница {page} из {totalPages}
         </span>
         <div className="flex gap-2">
@@ -156,7 +156,7 @@ export default async function ActivityPage({ searchParams }: { searchParams: SP 
         </div>
       </div>
 
-      <div><h2 className="text-lg font-semibold text-slate-100">Последние команды</h2><p className="mt-1 text-xs text-slate-400">Действия, запущенные пользователем через эту панель.</p></div>
+      <div><h2 className="text-lg font-semibold text-ink">Последние команды</h2><p className="mt-1 text-xs text-muted">Действия, запущенные пользователем через эту панель.</p></div>
       <div className="table-wrap">
         <table className="w-full">
           <thead>
@@ -171,20 +171,20 @@ export default async function ActivityPage({ searchParams }: { searchParams: SP 
           <tbody>
             {(actions?.items ?? []).map((a: any) => (
               <tr key={a.id}>
-                <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(a.created_at)}</Td>
-                <Td className="text-xs"><div>{humanLabel(a.kind)}</div><div className="font-mono text-[10px] text-slate-600">{a.kind}</div></Td>
+                <Td className="whitespace-nowrap text-xs text-subtle">{fmtDate(a.created_at)}</Td>
+                <Td className="text-xs"><div>{humanLabel(a.kind)}</div><div className="font-mono text-[10px] text-subtle">{a.kind}</div></Td>
                 <Td>
                   <Badge v={a.status === "pending" ? "pending_action" : a.status} />
                 </Td>
                 <Td>{a.post_id ?? "—"}</Td>
-                <Td className="max-w-[360px] break-words text-xs text-red-400">
+                <Td className="max-w-[360px] break-words text-xs text-danger">
                   {a.error ?? (a.result ? JSON.stringify(a.result).slice(0, 200) : "")}
                 </Td>
               </tr>
             ))}
             {(actions?.items ?? []).length === 0 && (
               <tr>
-                <Td className="text-xs text-zinc-500">нет действий</Td>
+                <Td className="text-xs text-subtle">нет действий</Td>
               </tr>
             )}
           </tbody>

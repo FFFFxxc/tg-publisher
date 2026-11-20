@@ -49,8 +49,8 @@ export default async function SourcesPage() {
                     <Badge v={s.enabled ? "published" : "skipped"}>{s.enabled ? "Активен" : "Отключён"}</Badge>
                   </Td>
                   <Td>{s.last_message_id ?? "—"}</Td>
-                  <Td className="max-w-[240px] text-xs text-red-400">{s.last_error ?? "—"}</Td>
-                  <Td className="text-xs text-zinc-500">{fmtDate(s.updated_at)}</Td>
+                  <Td className="max-w-[240px] text-xs text-danger">{s.last_error ?? "—"}</Td>
+                  <Td className="text-xs text-subtle">{fmtDate(s.updated_at)}</Td>
                   <Td>
                     <SourceRowActions s={s} />
                   </Td>

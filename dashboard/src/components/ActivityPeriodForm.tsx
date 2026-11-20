@@ -38,6 +38,6 @@ export default function ActivityPeriodForm({ initialMinutes }: { initialMinutes:
       {busy ? "Сохранение…" : "Сохранить период"}
     </button></div>
     <span className="field-help sm:col-span-2">Каждый включённый аккаунт ставит максимум одну новую реакцию за период. Значение применяется сразу, без перезапуска.</span>
-    {(message || error) && <div role="status" className={`sm:col-span-2 text-xs ${error ? "text-red-300" : "text-emerald-300"}`}>{error || message}</div>}
+    {(message || error) && <div role="status" className={`sm:col-span-2 text-xs ${error ? "text-danger" : "text-success"}`}>{error || message}</div>}
   </form>;
 }

@@ -45,6 +45,6 @@ export default function ActivityPhone({ accountId, masked, enabled }: {
       disabled={busy} aria-expanded={visible}>
       {busy ? "Загрузка…" : visible ? "Скрыть" : "Показать номер"}
     </button>}
-    {error && enabled && <div role="status" className="whitespace-normal text-red-300">{error}</div>}
+    {error && enabled && <div role="status" className="whitespace-normal text-danger">{error}</div>}
   </div>;
 }

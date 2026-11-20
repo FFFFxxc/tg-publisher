@@ -18,14 +18,14 @@ export default function PostSchedule({ p }: { p: any }) {
    setSaved(d.scheduled_at);setOpen(false);router.refresh();
   }catch(e:any){setError(e.message);}finally{setBusy(false);}
  }
- return <div className="w-full space-y-2 border-t border-slate-700/50 pt-3">
-  {saved && <div className="text-xs font-semibold text-teal-300">Запланировано: {new Date(saved).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",dateStyle:"short",timeStyle:"short"})} МСК</div>}
+ return <div className="w-full space-y-2 border-t border-line pt-3">
+  {saved && <div className="text-xs font-semibold text-accent">Запланировано: {new Date(saved).toLocaleString("ru-RU",{timeZone:"Europe/Moscow",dateStyle:"short",timeStyle:"short"})} МСК</div>}
   <button type="button" onClick={()=>setOpen(!open)} className="button-secondary">{saved?"Перенести публикацию":"Выбрать время публикации"}</button>
-  {open && <div className="space-y-2 rounded-xl border border-teal-500/20 bg-slate-950/60 p-3">
+  {open && <div className="space-y-2 rounded-xl border border-line-strong bg-tint p-3">
    <label className="field-label">Дата и время по Москве<input type="datetime-local" value={value} onChange={e=>setValue(e.target.value)} className={`w-full ${INPUT}`} /></label>
-   <p className="text-xs leading-5 text-slate-400">Пост выйдет в выбранное время, не раньше и независимо от общих слотов. Общая пауза бота действует и здесь.</p>
+   <p className="text-xs leading-5 text-muted">Пост выйдет в выбранное время, не раньше и независимо от общих слотов. Общая пауза бота действует и здесь.</p>
    <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={()=>save()} className="button-primary">{busy?"Сохраняем…":"Запланировать"}</button>{saved&&<button type="button" disabled={busy} onClick={()=>save(true)} className="button-secondary">Отменить время</button>}</div>
   </div>}
-  {error&&<div role="alert" className="text-xs text-red-300">{error}</div>}
+  {error&&<div role="alert" className="text-xs text-danger">{error}</div>}
  </div>;
 }

@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-10-03
+- Last refreshed: 2026-11-20
 - Primary product surfaces: обзор состояния, источники, очередь публикаций, расписание, AI, подпись, архив своего канала, журнал событий.
 - Evidence reviewed: `dashboard/src/app/*`, `dashboard/src/components/*`, `README.md`, `dashboard/README.md`.
 
@@ -33,7 +33,7 @@
 - Tradeoffs: сохраняем текущий Tailwind и API; улучшаем систему через общие классы и компоненты без новой зависимости.
 
 ## Visual language
-- Color: тёмно-синий фон, холодные синие поверхности, бирюзовый акцент, семантические зелёный/янтарный/красный.
+- Color: светлый лавандовый фон, белые карточки, фиолетовый акцент, семантические зелёный/янтарный/красный. Одни токены на всех маршрутах.
 - Typography: системный sans-serif, крупные заголовки, спокойный основной текст, моноширинный шрифт только для идентификаторов.
 - Spacing/layout rhythm: 4/8/12/16/24/32 px, ширина контента до 1440 px.
 - Shape/radius/elevation: радиусы 10–18 px, тонкие границы, мягкие тени без тяжёлого glassmorphism.
@@ -44,12 +44,12 @@
 - Existing components to reuse: `Card`, `Stat`, `Badge`, `ActionButton`, таблицы и формы.
 - New/changed components: `AppShell`, `PageHeader`, `Notice`, русские словари статусов и типов.
 - Variants and states: default/primary/danger; loading/success/error/disabled/empty.
-- Token/component ownership: глобальные токены — `globals.css`; семантика и базовые компоненты — `components/ui.tsx`.
+- Token/component ownership: глобальные токены — `dashboard/src/app/globals.css`, utility-алиасы — `dashboard/tailwind.config.ts`; компоненты — `dashboard/src/components/ui.tsx`. Компоновка главной — `dashboard/src/app/home.css`.
 
 ## Accessibility
 - Target standard: WCAG 2.1 AA для основных сценариев.
 - Keyboard/focus behavior: видимый `focus-visible`, нативные поля/кнопки, мобильное меню без hover-зависимости.
-- Contrast/readability: основной текст светлый на тёмно-синем фоне; вторичный текст не используется для критичной информации.
+- Contrast/readability: основной текст тёмный на белых и лавандовых поверхностях; вторичный текст не используется для критичной информации.
 - Screen-reader semantics: landmarks, заголовки, подписи полей, `aria-current`, live-регионы для результатов.
 - Reduced motion and sensory considerations: переходы отключаются через `prefers-reduced-motion`.
 
@@ -79,7 +79,6 @@
 - Test/screenshot expectations: `npm run build`; ручная проверка desktop/mobile при доступном браузере.
 
 ## Open questions
-- [ ] Нужна ли отдельная светлая тема после проверки обновлённой тёмной версии / владелец / низкое влияние.
 
 ## Queue update (2026-10-03)
 - Default queue is responsive content cards, no tiny table thumbnails.

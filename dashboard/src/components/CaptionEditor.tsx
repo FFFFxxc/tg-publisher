@@ -33,7 +33,7 @@ export default function CaptionEditor({ p }: { p: any }) {
     <textarea id={`caption-${p.id}`} className={INPUT} rows={4} maxLength={4096} value={text}
       placeholder="ИИ готовит подпись в очереди. Можно написать свою."
       onChange={e => { setText(e.target.value); setDirty(true); }} />
-    <p className="text-xs text-slate-400">Ручной текст заменяет ИИ-подпись. Общий футер добавляется при публикации.</p>
+    <p className="text-xs text-muted">Ручной текст заменяет ИИ-подпись. Общий футер добавляется при публикации.</p>
     <button className="button-secondary" disabled={busy || !text.trim()} onClick={save}>
       {busy ? "Сохраняю…" : "Сохранить подпись"}
     </button>

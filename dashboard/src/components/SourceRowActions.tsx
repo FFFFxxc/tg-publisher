@@ -24,7 +24,7 @@ export default function SourceRowActions({ s }: { s: any }) {
       <select
         value={n}
         onChange={(e) => setN(Number(e.target.value))}
-        className="rounded border border-zinc-700 bg-zinc-900 px-1 py-1 text-xs"
+        className="rounded border border-line bg-tint px-1 py-1 text-xs"
       >
         {[10, 25, 50, 100].map((x) => (
           <option key={x} value={x}>

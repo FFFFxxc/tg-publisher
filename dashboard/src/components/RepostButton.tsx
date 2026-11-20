@@ -21,8 +21,8 @@ export default function RepostButton({ groupKey }: { groupKey: string }) {
     <button type="button" className="button-secondary" onClick={()=>setOpen(!open)}>Выбрать время публикации</button>
     {open&&<div className="space-y-3">
       <label className="field-label">Дата и время по Москве<input type="datetime-local" className={INPUT} value={value} onInput={e=>setValue(e.currentTarget.value)} onChange={e=>setValue(e.target.value)} /></label>
-      {valid?<ActionButton path="own/repost" body={{group_key:groupKey,scheduled_at:date!.toISOString()}} label="Запланировать" variant="primary" confirm={`Запланировать повторную публикацию на ${value.replace("T"," ")} МСК?`} doneLabel="запланировано — время можно изменить в очереди" />:<p className="text-xs text-slate-400">Выберите будущую дату и время.</p>}
-      <p className="text-xs text-slate-400">Пост появится в очереди с выбранным временем. Общая пауза бота действует и здесь.</p>
+      {valid?<ActionButton path="own/repost" body={{group_key:groupKey,scheduled_at:date!.toISOString()}} label="Запланировать" variant="primary" confirm={`Запланировать повторную публикацию на ${value.replace("T"," ")} МСК?`} doneLabel="запланировано — время можно изменить в очереди" />:<p className="text-xs text-muted">Выберите будущую дату и время.</p>}
+      <p className="text-xs text-muted">Пост появится в очереди с выбранным временем. Общая пауза бота действует и здесь.</p>
     </div>}
     </div>
   );

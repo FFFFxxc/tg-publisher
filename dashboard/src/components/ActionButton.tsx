@@ -111,7 +111,7 @@ export default function ActionButton({
         {state === "run" ? "Выполняется…" : label}
       </button>
       {msg && (
-        <span role="status" className={`max-w-xs text-xs ${state === "err" ? "text-red-300" : "text-emerald-300"}`}>{msg}</span>
+        <span role="status" className={`max-w-xs text-xs ${state === "err" ? "text-danger" : "text-success"}`}>{msg}</span>
       )}
     </span>
   );

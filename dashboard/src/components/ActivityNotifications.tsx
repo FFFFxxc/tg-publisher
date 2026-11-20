@@ -47,15 +47,15 @@ export default function ActivityNotifications({ accountId }: { accountId: string
       {open ? "Скрыть уведомления" : "Уведомления Telegram"}
     </button>
     <div id={panelId} hidden={!open} className="mt-2 space-y-2 text-xs">
-      <p className="text-slate-400">До 10 последних уведомлений Telegram с датой и полным текстом.</p>
+      <p className="text-muted">До 10 последних уведомлений Telegram с датой и полным текстом.</p>
       <div role="status">
         {loading && "Загрузка…"}
-        {result.status === "error" && <span className="text-red-300">{result.message}</span>}
+        {result.status === "error" && <span className="text-danger">{result.message}</span>}
         {result.status === "ready" && (result.notifications.length === 0 ? "Уведомлений пока нет."
           : <ul className="space-y-2">{result.notifications.map((notification, i) =>
-          <li key={`${notification.received_at}-${i}`} className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
-            <time className="block text-slate-500" dateTime={notification.received_at}>{fmtDate(notification.received_at)}</time>
-            <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">
+          <li key={`${notification.received_at}-${i}`} className="rounded-lg border border-line bg-tint p-3">
+            <time className="block text-subtle" dateTime={notification.received_at}>{fmtDate(notification.received_at)}</time>
+            <p className="mt-1 whitespace-pre-wrap break-words text-ink">
               {notification.text || "Сообщение без текста"}
             </p>
           </li>)}</ul>)}
