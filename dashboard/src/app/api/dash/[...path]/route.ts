@@ -35,6 +35,7 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "GET", re: /^actions\/[\w-]+$/ },
   { method: "GET", re: /^events$/ },
   { method: "GET", re: /^activity-accounts$/ },
+  { method: "GET", re: /^activity-accounts\/[a-f0-9]{32}\/notifications$/ },
   { method: "GET", re: /^activity-settings$/ },
   { method: "PUT", re: /^activity-settings$/ },
   { method: "POST", re: /^activity-accounts\/login\/(start|complete)$/ },
@@ -50,6 +51,14 @@ async function handle(req: NextRequest, ctx: Ctx) {
   const method = req.method.toUpperCase();
   if (!ALLOWED.some((a) => a.method === method && a.re.test(sub))) {
     return NextResponse.json({ error: "not allowed" }, { status: 404 });
+  }
+  const notifications = /^activity-accounts\/[a-f0-9]{32}\/notifications$/.test(sub);
+  const headers = notifications ? { "Cache-Control": "private, no-store" } : undefined;
+  // Accounts are visible in legacy deployments without Basic Auth. Do not pass
+  // through security notification metadata unless the dashboard gate is enabled.
+  if (notifications && (!process.env.DASHBOARD_USERNAME || !process.env.DASHBOARD_PASSWORD)) {
+    return NextResponse.json({ error: "Для просмотра уведомлений включите авторизацию панели." },
+      { status: 403, headers });
   }
   try {
     if (method === "GET" && /^(posts\/\d+\/preview|own\/preview|overview\/destination-avatar)$/.test(sub)) {
@@ -77,9 +86,9 @@ async function handle(req: NextRequest, ctx: Ctx) {
       }
     }
     const data = await pubFetch(`/api/${sub}${req.nextUrl.search}`, init);
-    return NextResponse.json(data ?? {});
+    return NextResponse.json(data ?? {}, { headers });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "upstream error" }, { status: e?.status ?? 502 });
+    return NextResponse.json({ error: e?.message ?? "upstream error" }, { status: e?.status ?? 502, headers });
   }
 }
 

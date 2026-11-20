@@ -1,6 +1,7 @@
 import { pubFetch } from "@/lib/api";
 import { Badge, Card, Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
 import ActivityLoginForm from "@/components/ActivityLoginForm";
+import ActivityNotifications from "@/components/ActivityNotifications";
 import ActivityPeriodForm from "@/components/ActivityPeriodForm";
 import ActionButton from "@/components/ActionButton";
 import { fmtDate } from "@/lib/format";
@@ -43,6 +44,7 @@ export default async function AccountsPage() {
           <ActionButton path={`activity-accounts/${a.id}`} method="PATCH" body={{ enabled: !a.enabled }}
             label={a.enabled ? "Отключить" : "Включить"} doneLabel={a.enabled ? "отключён" : "включён"} />
           <ActionButton path={`activity-accounts/${a.id}/react`} label="Поставить реакции" doneLabel="реакции проверены" />
+          {a.enabled && <ActivityNotifications accountId={a.id} />}
           <ActionButton path={`activity-accounts/${a.id}`} method="DELETE" label="Удалить" variant="danger"
             confirm={`Удалить аккаунт ${a.display_name} и его локальную сессию?`} doneLabel="удалён" />
         </div></Td>
