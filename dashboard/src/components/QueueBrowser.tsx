@@ -14,7 +14,7 @@ function NeutralMeta({ kind, media }: { kind: string; media: string }) {
   return <span className="inline-flex items-center gap-1.5 text-xs text-slate-400" title={`${humanLabel(kind)}, ${humanLabel(media)}`}><svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.8"><path d="M4 6.5h16v11H4zM8 3.5h8M8 20.5h8" /></svg>{humanLabel(kind)} · {humanLabel(media)}</span>;
 }
 
-export default function QueueBrowser({ items, total, page, limit, sources, filters, initialView, hasError }: { items: any[]; total: number; page: number; limit: number; sources: any[]; filters: FilterValues; initialView: View; hasError: boolean }) {
+export default function QueueBrowser({ items, total, page, limit, filters, initialView, hasError }: { items: any[]; total: number; page: number; limit: number; filters: FilterValues; initialView: View; hasError: boolean }) {
   const [view, setView] = useState<View>(initialView);
   const [selected, setSelected] = useState<any | null>(null);
   useEffect(() => {
@@ -52,7 +52,7 @@ export default function QueueBrowser({ items, total, page, limit, sources, filte
     </article>;
   });
   return <>
-    <QueueFilters filters={filters} sources={sources} />
+    <QueueFilters filters={{ ...filters, view: view === "list" || filters.view ? view : "" }} />
     <div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-500">Найдено: {total}</p><div className="flex rounded-xl border border-slate-700/70 bg-slate-950/40 p-1" role="group" aria-label="Вид очереди"><button type="button" aria-pressed={view === "grid"} onClick={() => changeView("grid")} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${view === "grid" ? "bg-slate-700 text-white" : "text-slate-400"}`}>Плитка</button><button type="button" aria-pressed={view === "list"} onClick={() => changeView("list")} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${view === "list" ? "bg-slate-700 text-white" : "text-slate-400"}`}>Список</button></div></div>
     {items.length === 0 && !hasError ? <Empty>ничего не найдено по текущим фильтрам</Empty> : <div className={view === "grid" ? "grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" : "grid gap-3"}>{cards}</div>}
     <div className="flex items-center justify-between"><span className="text-xs text-slate-500">Страница {page} из {totalPages}</span><div className="flex gap-2">{page > 1 && <Link href={queueHref(filters, { view }, page - 1)} className="button-secondary inline-flex items-center">← Назад</Link>}{page < totalPages && <Link href={queueHref(filters, { view }, page + 1)} className="button-secondary inline-flex items-center">Вперёд →</Link>}</div></div>

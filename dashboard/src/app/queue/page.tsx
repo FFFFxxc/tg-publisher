@@ -1,4 +1,5 @@
 import { pubFetch } from "@/lib/api";
+import { queueApiStatus } from "@/lib/queue";
 import { ErrorBox, PageHeader } from "@/components/ui";
 import QueueBrowser from "@/components/QueueBrowser";
 
@@ -15,18 +16,14 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
 
   const params = new URLSearchParams();
   for (const k of FILTER_KEYS) if (sp(k)) params.set(k, sp(k));
-  if (!sp("status")) params.set("status", "queued");
+  params.set("status", queueApiStatus(sp("status")));
   params.set("limit", String(LIMIT));
   params.set("offset", String((page - 1) * LIMIT));
 
   let data: any = { items: [], total: 0 };
-  let sources: any = { items: [] };
   let error = "";
   try {
-    [data, sources] = await Promise.all([
-      pubFetch(`/api/posts?${params}`),
-      pubFetch("/api/sources?limit=100"),
-    ]);
+    data = await pubFetch(`/api/posts?${params}`);
   } catch (e: any) {
     error = e?.message ?? "нет связи с Control API";
   }
@@ -36,7 +33,7 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
     <div className="space-y-5">
       <PageHeader eyebrow="Контент" title="Очередь публикаций" description="Быстрый отбор материалов без длинных карточек. Подробности, подпись и время публикации открываются в боковой панели." />
       {error && <ErrorBox message={error} />}
-      <QueueBrowser items={items} total={data?.total ?? 0} page={page} limit={LIMIT} sources={sources?.items ?? []}
+      <QueueBrowser items={items} total={data?.total ?? 0} page={page} limit={LIMIT}
         filters={{ ...Object.fromEntries(FILTER_KEYS.map(key => [key, sp(key)])), view: sp("view") }}
         initialView={sp("view") === "list" ? "list" : "grid"} hasError={Boolean(error)} />
     </div>

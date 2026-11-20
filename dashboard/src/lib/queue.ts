@@ -10,6 +10,21 @@ export function queueHref(filters: QueueFilters, changes: QueueFilters = {}, pag
   return `/queue${query ? `?${query}` : ""}`;
 }
 
+export const QUEUE_VIEWS = [
+  { value: "candidate", label: "Готов к отбору" },
+  { value: "failed", label: "Ошибка" },
+  { value: "skipped", label: "Пропущен" },
+  { value: "all", label: "Все" },
+] as const;
+
+export function queueViewHref(filters: QueueFilters, status: string): string {
+  return queueHref({ status: status === "candidate" ? "" : status, q: filters.q, view: filters.view });
+}
+
+export function queueApiStatus(status: string): string {
+  return status || "candidate";
+}
+
 export function scoreLabel(score: unknown): string {
   if (score === null || score === undefined || score === "") return "—";
   const number = typeof score === "number" ? score : Number(score);
