@@ -26,7 +26,7 @@ export default async function SourcesPage() {
         <Empty>источников пока нет — добавьте первый через форму выше</Empty>
       ) : (
         <div className="table-wrap">
-          <table className="w-full">
+          <table className="data-table source-table w-full">
             <thead>
               <tr>
                 <Th>ID</Th>

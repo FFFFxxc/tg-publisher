@@ -11,7 +11,7 @@
 }
 .home-kicker { color: var(--accent); font-size: 13px; font-weight: 740; letter-spacing: .065em; text-transform: uppercase; }
 .home-kicker svg, .home-date svg { width: 17px; height: 17px; }
-.home-header h1 { margin: 8px 0 4px; font-size: clamp(42px, 4vw, 64px); font-weight: 795; line-height: 1.05; letter-spacing: -.058em; }
+.home-header h1 { margin: 8px 0 4px; font-size: clamp(42px, 4vw, 64px); font-weight: 740; line-height: 1.08; letter-spacing: -.044em; }
 .home-header p { margin: 8px 0 0; font-size: clamp(14px, 1vw, 17px); color: var(--muted); }
 .home-date {
   width: fit-content; flex: none; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;

@@ -32,7 +32,7 @@ export default async function AccountsPage() {
       <ActivityLoginForm />
     </Card>
     {items.length === 0 && !error ? <Empty>аккаунтов пока нет — добавьте первый по номеру телефона</Empty> :
-      <div className="table-wrap"><table className="w-full"><thead><tr>
+      <div className="table-wrap"><table className="data-table accounts-table w-full"><thead><tr>
         <Th>Аккаунт</Th><Th>Телефон</Th><Th>Telegram ID</Th><Th>Состояние</Th><Th>Последний актив</Th><Th>Действия</Th>
       </tr></thead><tbody>{items.map((a) => <tr key={a.id}>
         <Td>{a.display_name}</Td><Td className="text-xs"><ActivityPhone key={String(a.enabled)} accountId={a.id}
@@ -42,7 +42,7 @@ export default async function AccountsPage() {
           {!a.enabled ? "Отключён" : a.status === "ready" ? "Готов" : "Ошибка"}
         </Badge>{a.last_error && <div className="mt-2 max-w-[260px] text-xs text-danger">{a.last_error}</div>}</Td>
         <Td className="text-xs">{fmtDate(a.last_active_at)}</Td>
-        <Td><div className="flex flex-wrap gap-2">
+        <Td><div className="row-actions">
           <ActionButton path={`activity-accounts/${a.id}`} method="PATCH" body={{ enabled: !a.enabled }}
             label={a.enabled ? "Отключить" : "Включить"} doneLabel={a.enabled ? "отключён" : "включён"} />
           <ActionButton path={`activity-accounts/${a.id}/react`} label="Поставить реакции" doneLabel="реакции проверены" />

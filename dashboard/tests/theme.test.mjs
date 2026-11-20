@@ -17,13 +17,29 @@ function luminance(hex) {
 
 test('normal dashboard text, controls and status labels reach 4.5:1', () => {
   const pairs = ['ink','muted','subtle','accent','success','warning','danger','info']
-    .flatMap(ink => ['paper','canvas','tint','selected'].map(paper => [ink, paper]));
+    .flatMap(ink => ['paper','canvas','canvas-shadow','tint','selected'].map(paper => [ink, paper]));
   for (const state of ['success','warning','danger','info']) pairs.push([state, `${state}-tint`]);
   pairs.push(['paper','accent']);
+  pairs.push(['ink','button-secondary'], ['ink','button-hover']);
+  for (const bg of ['rail', 'rail-hover', 'rail-selected']) {
+    pairs.push(['rail-ink',bg], ['rail-muted',bg]);
+  }
   for (const [fg,bg] of pairs) {
     const [lo,hi] = [luminance(palette[fg]), luminance(palette[bg])].sort((a,b)=>a-b);
     assert.ok((hi + 0.05) / (lo + 0.05) >= 4.5, `${fg} on ${bg}`);
   }
+});
+
+test('Golos Text is served locally in Latin and Cyrillic with the upstream license', () => {
+  assert.match(globalCss, /body\s*\{[^}]*font-family: "Golos Text"/s);
+  assert.match(globalCss, /unicode-range: U\+0301, U\+0400-045F/);
+  for (const subset of ['cyrillic','latin']) {
+    const url = new URL(`../public/fonts/golos/${subset}.woff2`, import.meta.url);
+    const face = readFileSync(url);
+    assert.equal(face.subarray(0, 4).toString('ascii'), 'wOF2');
+    assert.match(globalCss, new RegExp(`/fonts/golos/${subset}\\.woff2`));
+  }
+  assert.match(read('public/fonts/golos/OFL.txt'), /SIL Open Font License, Version 1\.1/);
 });
 
 test('one shared palette and no legacy dark surface utilities in dashboard JSX', () => {
