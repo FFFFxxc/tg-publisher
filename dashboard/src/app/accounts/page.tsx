@@ -2,6 +2,7 @@ import { pubFetch } from "@/lib/api";
 import { Badge, Card, Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
 import ActivityLoginForm from "@/components/ActivityLoginForm";
 import ActivityNotifications from "@/components/ActivityNotifications";
+import ActivityPhone from "@/components/ActivityPhone";
 import ActivityPeriodForm from "@/components/ActivityPeriodForm";
 import ActionButton from "@/components/ActionButton";
 import { fmtDate } from "@/lib/format";
@@ -34,7 +35,8 @@ export default async function AccountsPage() {
       <div className="table-wrap"><table className="w-full"><thead><tr>
         <Th>Аккаунт</Th><Th>Телефон</Th><Th>Telegram ID</Th><Th>Состояние</Th><Th>Последний актив</Th><Th>Действия</Th>
       </tr></thead><tbody>{items.map((a) => <tr key={a.id}>
-        <Td>{a.display_name}</Td><Td className="font-mono text-xs">{a.phone_mask}</Td>
+        <Td>{a.display_name}</Td><Td className="text-xs"><ActivityPhone key={String(a.enabled)} accountId={a.id}
+          masked={a.phone_mask} enabled={a.enabled} /></Td>
         <Td className="font-mono text-xs">{a.telegram_user_id}</Td>
         <Td><Badge v={a.enabled && a.status === "ready" ? "published" : a.status === "error" ? "error" : "skipped"}>
           {!a.enabled ? "Отключён" : a.status === "ready" ? "Готов" : "Ошибка"}

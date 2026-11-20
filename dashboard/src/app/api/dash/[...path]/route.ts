@@ -36,6 +36,7 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "GET", re: /^events$/ },
   { method: "GET", re: /^activity-accounts$/ },
   { method: "GET", re: /^activity-accounts\/[a-f0-9]{32}\/notifications$/ },
+  { method: "GET", re: /^activity-accounts\/[a-f0-9]{32}\/phone$/ },
   { method: "GET", re: /^activity-settings$/ },
   { method: "PUT", re: /^activity-settings$/ },
   { method: "POST", re: /^activity-accounts\/login\/(start|complete)$/ },
@@ -52,12 +53,12 @@ async function handle(req: NextRequest, ctx: Ctx) {
   if (!ALLOWED.some((a) => a.method === method && a.re.test(sub))) {
     return NextResponse.json({ error: "not allowed" }, { status: 404 });
   }
-  const notifications = /^activity-accounts\/[a-f0-9]{32}\/notifications$/.test(sub);
-  const headers = notifications ? { "Cache-Control": "private, no-store" } : undefined;
+  const privateAccountData = /^activity-accounts\/[a-f0-9]{32}\/(notifications|phone)$/.test(sub);
+  const headers = privateAccountData ? { "Cache-Control": "private, no-store" } : undefined;
   // Accounts are visible in legacy deployments without Basic Auth. Do not pass
-  // through security notification metadata unless the dashboard gate is enabled.
-  if (notifications && (!process.env.DASHBOARD_USERNAME || !process.env.DASHBOARD_PASSWORD)) {
-    return NextResponse.json({ error: "Для просмотра уведомлений включите авторизацию панели." },
+  // through private account data unless the dashboard gate is enabled.
+  if (privateAccountData && (!process.env.DASHBOARD_USERNAME || !process.env.DASHBOARD_PASSWORD)) {
+    return NextResponse.json({ error: "Включите авторизацию панели." },
       { status: 403, headers });
   }
   try {
