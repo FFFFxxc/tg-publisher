@@ -17,7 +17,7 @@ function luminance(hex) {
 
 test('normal dashboard text, controls and status labels reach 4.5:1', () => {
   const pairs = ['ink','muted','subtle','accent','success','warning','danger','info']
-    .flatMap(ink => ['paper','canvas','canvas-shadow','tint','selected'].map(paper => [ink, paper]));
+    .flatMap(ink => ['paper','canvas','canvas-shadow','tint','selected','panel','panel-inset'].map(paper => [ink, paper]));
   for (const state of ['success','warning','danger','info']) pairs.push([state, `${state}-tint`]);
   pairs.push(['paper','accent']);
   pairs.push(['ink','button-secondary'], ['ink','button-hover']);
@@ -28,6 +28,14 @@ test('normal dashboard text, controls and status labels reach 4.5:1', () => {
     const [lo,hi] = [luminance(palette[fg]), luminance(palette[bg])].sort((a,b)=>a-b);
     assert.ok((hi + 0.05) / (lo + 0.05) >= 4.5, `${fg} on ${bg}`);
   }
+});
+
+test('cards use a shared lilac fill, distinct from canvas and form controls', () => {
+  assert.ok(luminance(palette.paper) > luminance(palette.panel));
+  assert.ok(luminance(palette.panel) > luminance(palette.canvas));
+  assert.ok(luminance(palette['panel-edge']) < luminance(palette['panel-line']));
+  assert.match(globalCss, /\.surface, \.table-wrap, \.filter-panel\s*\{[^}]*background: var\(--panel\)/s);
+  assert.match(read('src/app/home.css'), /\.home-card\s*\{[^}]*background: var\(--panel\)/s);
 });
 
 test('Golos Text is served locally in Latin and Cyrillic with the upstream license', () => {

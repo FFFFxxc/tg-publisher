@@ -22,7 +22,7 @@
 .home-overview { display: grid; gap: var(--home-outer); }
 .home-guard {
   display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 14px 18px;
-  border: 1px solid var(--line); border-radius: 20px; background: var(--tint);
+  border: 1px solid var(--panel-line); border-radius: 20px; background: var(--panel);
 }
 .home-guard h2 { font-size: 16px; line-height: 1.3; font-weight: 730; margin: 0 0 3px; }
 .home-guard p, .home-muted { font-size: 14px; color: var(--muted); line-height: 1.45; margin: 0; }
@@ -41,7 +41,8 @@
 .home-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0,1fr); gap: var(--home-outer); }
 .home-summary { min-width: 0; display: grid; gap: var(--home-outer); align-content: start; }
 .home-card {
-  min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 20px;
+  min-width: 0; background: var(--panel); border: 1px solid var(--panel-line);
+  border-top: 2px solid var(--panel-edge); border-radius: 20px;
   padding: clamp(16px, 1.4vw, 24px); box-shadow: var(--card-shadow);
 }
 .home-heading { margin: 0; font-size: clamp(17px, 1.45vw, 22px); line-height: 1.2; letter-spacing: -.03em; font-weight: 740; }
@@ -49,7 +50,7 @@
 .home-next { display: flex; flex-direction: column; }
 .home-preview { position: relative; }
 .home-page .home-media {
-  width: 100%; height: clamp(144px, 11vw, 216px); border: 0; border-radius: 12px; background: #ede6f6;
+  width: 100%; height: clamp(144px, 11vw, 216px); border: 0; border-radius: 12px; background: var(--panel-inset);
 }
 .home-media > span:first-child { color: var(--muted); }
 .home-media-badge {
@@ -81,7 +82,6 @@
 .home-dot[data-state="green"] { background: var(--success); box-shadow: 0 0 0 3px #0e765f22; }
 .home-dot[data-state="yellow"] { background: #a45d06; box-shadow: 0 0 0 3px #a45d0622; }
 .home-dot[data-state="red"] { background: var(--danger); box-shadow: 0 0 0 3px #a2284222; }
-.home-queue { background: var(--tint); }
 .home-queue > .home-muted { margin: 8px 0 12px; }
 .home-funnel { display: grid; gap: 8px; }
 .home-funnel > div { --bar: #7761c7; }

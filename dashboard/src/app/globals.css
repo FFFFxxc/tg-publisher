@@ -26,6 +26,10 @@
   --rail-muted: #d7c8e2;
   --rail-line: #786587;
   --paper: #f8f4fa;
+  --panel: #f1e6f8;
+  --panel-inset: #e7d8f0;
+  --panel-line: #b79ac8;
+  --panel-edge: #a984bc;
   --tint: #efe7f3;
   --selected: #e8daef;
   --line: #d8c9e2;
@@ -116,10 +120,12 @@ button { transition: border-color .15s ease, background-color .15s ease, color .
 }
 .page-description { max-width: 720px; margin-top: 8px; color: var(--muted); font-size: 15px; line-height: 1.55; }
 .surface, .table-wrap, .filter-panel {
-  border: 1px solid var(--line); border-radius: 20px; background: var(--paper); box-shadow: var(--card-shadow);
+  border: 1px solid var(--panel-line); border-top: 2px solid var(--panel-edge);
+  border-radius: 20px; background: var(--panel); box-shadow: var(--card-shadow);
 }
 .table-wrap { overflow-x: auto; }
-.data-table tbody tr:nth-child(even) { background: var(--tint); }
+.table-wrap thead th { background: var(--panel-inset); }
+.data-table tbody tr:nth-child(even) { background: var(--paper); }
 .data-table th { font-size: 11px; letter-spacing: .025em; text-transform: none; }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 248px; }
 .row-actions :is(button, select) { min-height: 34px; white-space: nowrap; }
@@ -144,7 +150,8 @@ button { transition: border-color .15s ease, background-color .15s ease, color .
 .button-danger:hover:not(:disabled) { border-color: var(--danger); }
 button:disabled { cursor: not-allowed; }
 .preview-control { background: #251d42ed; color: white; }
-.preview-dialog { background: var(--paper); color: var(--ink); }
+.media-preview { background: var(--panel-inset); }
+.preview-dialog { background: var(--panel); color: var(--ink); }
 .preview-dialog-image { background: #251d42; border-radius: 12px; }
 
 @media (max-height: 850px) and (min-width: 901px) {

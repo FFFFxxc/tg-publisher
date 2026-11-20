@@ -227,7 +227,7 @@ export default function AiForm({ initial }: { initial: any }) {
         </div>
       </Card>
 
-      <div className="sticky bottom-3 z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-paper p-4 shadow-card">
+      <div className="surface sticky bottom-3 z-20 flex flex-wrap items-center gap-3 p-4">
         <button disabled={busy || !dirty} className="button-primary disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Сохраняем…" : dirty ? "Сохранить настройки" : "Изменения сохранены"}</button>
         {dirty && <span className="text-xs text-warning">Есть несохранённые изменения.</span>}
         {msg && <span role="status" className="text-xs text-success">{msg}</span>}

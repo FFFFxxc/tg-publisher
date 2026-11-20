@@ -17,7 +17,7 @@ export default async function SchedulePage() {
     <div>
       <PageHeader eyebrow="Автоматизация" title="Расписание" description="Выберите время публикаций и правила отбора материалов. Изменения применяются без перезапуска бота." />
       {error ? <ErrorBox message={error} /> : <ScheduleForm initial={data} />}
-      <section className="mt-6 rounded-xl border border-line p-5">
+      <section className="surface mt-6 p-5">
         <h2 className="text-lg font-semibold">Сеточные каналы</h2>
         <p className="mt-2 text-sm text-muted">Расписание дополнительного канала, рекламных репостов и привязку аккаунтов для реакций можно изменить на отдельной странице.</p>
         <Link href="/additional" className="button-secondary mt-4 inline-flex items-center">Открыть дополнительные каналы</Link>

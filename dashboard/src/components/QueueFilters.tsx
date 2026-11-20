@@ -7,7 +7,7 @@ export default function QueueFilters({ filters }: { filters: FilterValues }) {
   const legacy = !QUEUE_VIEWS.some(view => view.value === active) ||
     Object.entries(filters).some(([key, value]) => value && !["status", "q", "view"].includes(key));
 
-  return <section aria-label="Фильтры очереди" className="sticky top-[115px] z-20 -mx-1 rounded-2xl border border-line bg-paper p-3 shadow-card min-[901px]:top-2">
+  return <section aria-label="Фильтры очереди" className="surface sticky top-[115px] z-20 -mx-1 p-3 min-[901px]:top-2">
     <div className="flex flex-wrap items-center gap-3">
       <nav aria-label="Состояние публикаций" className="flex flex-wrap gap-2">
         {QUEUE_VIEWS.map(({ value, label }) => {

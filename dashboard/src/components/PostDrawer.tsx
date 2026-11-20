@@ -34,7 +34,7 @@ export default function PostDrawer({ post, onClose }: { post: any | null; onClos
   const text = cleanPostText(post.text, post.source_ref);
   return <div className="fixed inset-0 z-50" role="presentation">
     <button type="button" className="absolute inset-0 cursor-default bg-black/70" aria-label="Закрыть панель" onClick={onClose} />
-    <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="post-drawer-title" className="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-line bg-paper p-4 shadow-card sm:p-6">
+    <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="post-drawer-title" className="preview-dialog absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-line p-4 shadow-card sm:p-6">
       <div className="mb-5 flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wider text-accent">Публикация</p><h2 id="post-drawer-title" className="mt-1 text-2xl font-bold text-ink">Пост №{post.id}</h2></div><button ref={closeRef} type="button" onClick={onClose} className="button-secondary" aria-label="Закрыть панель поста">Закрыть</button></div>
       <div className="space-y-5">
         <MediaPreview postId={post.id} compact />
