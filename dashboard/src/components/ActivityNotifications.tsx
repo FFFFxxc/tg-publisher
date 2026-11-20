@@ -5,8 +5,10 @@ import { fmtDate } from "@/lib/format";
 
 type Result =
   | { status: "closed" | "loading" }
-  | { status: "ready"; dates: string[] }
+  | { status: "ready"; notifications: Notification[] }
   | { status: "error"; message: string };
+
+type Notification = { received_at: string; text: string };
 
 export default function ActivityNotifications({ accountId }: { accountId: string }) {
   const [result, setResult] = useState<Result>({ status: "closed" });
@@ -25,11 +27,15 @@ export default function ActivityNotifications({ accountId }: { accountId: string
           : response.status === 504 ? "Telegram не ответил вовремя." : "Уведомления недоступны.");
       }
       const data = await response.json();
-      if (!Array.isArray(data?.received_at) || !data.received_at.every(
-        (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value)))) {
+      if (!Array.isArray(data?.notifications) || !data.notifications.every((value: unknown) => {
+        if (!value || typeof value !== "object") return false;
+        const item = value as Record<string, unknown>;
+        return typeof item.received_at === "string" && Number.isFinite(Date.parse(item.received_at))
+          && typeof item.text === "string";
+      })) {
         throw new Error("Получен некорректный ответ.");
       }
-      setResult({ status: "ready", dates: data.received_at });
+      setResult({ status: "ready", notifications: data.notifications });
     } catch (error) {
       setResult({ status: "error", message: error instanceof Error ? error.message : "Уведомления недоступны." });
     }
@@ -41,13 +47,17 @@ export default function ActivityNotifications({ accountId }: { accountId: string
       {open ? "Скрыть уведомления" : "Уведомления Telegram"}
     </button>
     <div id={panelId} hidden={!open} className="mt-2 space-y-2 text-xs">
-      <p className="text-slate-400">До 10 последних уведомлений. Здесь видно время; текст — в приложении Telegram.</p>
+      <p className="text-slate-400">До 10 последних уведомлений Telegram с датой и полным текстом.</p>
       <div role="status">
         {loading && "Загрузка…"}
         {result.status === "error" && <span className="text-red-300">{result.message}</span>}
-        {result.status === "ready" && (result.dates.length === 0 ? "Уведомлений пока нет."
-          : <ul className="space-y-1">{result.dates.map((date, i) => <li key={`${date}-${i}`}>
-            <time dateTime={date}>{fmtDate(date)}</time>
+        {result.status === "ready" && (result.notifications.length === 0 ? "Уведомлений пока нет."
+          : <ul className="space-y-2">{result.notifications.map((notification, i) =>
+          <li key={`${notification.received_at}-${i}`} className="rounded-lg border border-slate-700/60 bg-slate-950/40 p-3">
+            <time className="block text-slate-500" dateTime={notification.received_at}>{fmtDate(notification.received_at)}</time>
+            <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">
+              {notification.text || "Сообщение без текста"}
+            </p>
           </li>)}</ul>)}
       </div>
       {!loading && open && <button type="button" className="button-secondary" onClick={() => void load()}>
