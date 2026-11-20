@@ -1,5 +1,45 @@
 /* Dashboard overview composition. Palette and navigation come from globals.css. */
-.home-page { --home-outer: 20px; }
+.home-page { --home-outer: 20px; position: relative; isolation: isolate; }
+
+/* Publisher's signal: decorative SVG under the dashboard, never over a control. */
+.home-signal {
+  position: absolute; inset: -36px calc(-1 * var(--gutter)) auto;
+  height: min(860px, calc(100% + 36px)); overflow: hidden; z-index: -1; pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000 53%, transparent 100%);
+}
+.home-signal svg { display: block; width: 100%; height: 100%; }
+.home-signal-haze { transform-origin: 76% 24%; animation: home-signal-drift 24s ease-in-out infinite alternate; }
+.home-signal-traces { animation: home-signal-float 18s ease-in-out infinite alternate; }
+.home-signal-pulse {
+  stroke: #fbf1ff; stroke-width: 2.8; stroke-linecap: round; stroke-dasharray: 5 95;
+  stroke-dashoffset: 40; opacity: .91; animation: home-signal-flow 17s linear -8s infinite;
+}
+.home-signal-pulse-secondary { stroke-width: 2; animation-duration: 24s; animation-delay: -15s; opacity: .74; }
+.home-signal-pulse-tertiary { stroke: #aa79c8; stroke-width: 2.4; animation-duration: 22s; animation-delay: -4s; opacity: .7; }
+@keyframes home-signal-drift { from { transform: translate(-85px, -24px) scale(.98); } to { transform: translate(66px, 46px) scale(1.13); } }
+@keyframes home-signal-float { from { transform: translateY(-26px); } to { transform: translateY(26px); } }
+@keyframes home-signal-flow { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+
+.home-header-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.home-motion-label {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 12px; border-radius: 10px;
+  color: var(--accent); background: var(--panel); border: 1px solid var(--panel-line); font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.home-motion-label:hover { background: var(--panel-inset); border-color: var(--accent); }
+.home-motion-icon { flex: none; width: 9px; height: 10px; border-inline: 2px solid currentColor; }
+.home-motion-input:focus-visible ~ .home-header .home-motion-label { outline: 2px solid var(--accent); outline-offset: 2px; }
+.home-motion-input:checked ~ .home-signal :is(.home-signal-haze, .home-signal-traces, .home-signal-pulse) { animation-play-state: paused; }
+.home-motion-paused, .home-motion-input:checked ~ .home-header .home-motion-running { display: none; }
+.home-motion-input:checked ~ .home-header .home-motion-paused { display: inline; }
+.home-motion-input:checked ~ .home-header .home-motion-icon {
+  width: 0; height: 0; border: 0; border-left: 8px solid currentColor; border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+}
+@media (max-width: 900px) { .home-signal { top: -24px; height: min(740px, calc(100% + 24px)); opacity: .8; } }
+@media (max-width: 480px) { .home-header-tools { justify-content: flex-start; } }
+@media (prefers-reduced-motion: reduce) {
+  .home-signal :is(.home-signal-haze, .home-signal-traces, .home-signal-pulse) { animation: none !important; }
+  .home-motion-label, .home-motion-input { display: none; }
+}
 
 .home-header, .home-card-top, .home-post-line, .home-funnel-label, .home-processes li {
   display: flex; justify-content: space-between; gap: 12px;
