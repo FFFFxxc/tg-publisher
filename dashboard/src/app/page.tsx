@@ -1,6 +1,9 @@
 import Overview from "@/components/Overview";
-import { ErrorBox, PageHeader } from "@/components/ui";
+import { ErrorBox } from "@/components/ui";
 import { pubFetch } from "@/lib/api";
+import { homeDate } from "@/lib/homeOverview";
+import PublisherIcon from "@/components/PublisherIcon";
+import "./home.css";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +16,15 @@ export default async function HomePage() {
     error = e?.message ?? "нет связи с Control API";
   }
   return (
-    <div>
-      <PageHeader eyebrow="Состояние системы" title="Главная" description="Всё важное о работе бота, ближайшей публикации и очереди — на одном экране." />
+    <div className="home-page">
+      <header className="home-header">
+        <div>
+          <div className="home-kicker"><PublisherIcon name="dashboard" /> Управление каналом</div>
+          <h1>Главная</h1>
+          <p>Работа бота, ближайшая публикация и очередь</p>
+        </div>
+        <div className="home-date"><PublisherIcon name="calendar" /> {homeDate(new Date())}</div>
+      </header>
       {error ? <ErrorBox message={error} /> : <Overview initial={data} />}
     </div>
   );

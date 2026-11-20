@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import PublisherIcon from "./PublisherIcon";
 
 const NAV = [
   { href: "/", label: "Главная", short: "Обзор", group: "Управление", icon: "home" },
@@ -35,14 +36,15 @@ function Icon({ name }: { name: string }) {
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const home = pathname === "/";
   const groups = [...new Set(NAV.map((item) => item.group))];
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
-    <div className="app-shell">
+    <div className={home ? "app-shell home-theme" : "app-shell"}>
       <aside className="sidebar">
         <Link href="/" className="brand" aria-label="На главную">
-          <span className="brand-mark">T</span>
+          <span className="brand-mark">{home ? <PublisherIcon name="plane" /> : "T"}</span>
           <span><strong>Publisher</strong><small>Управление каналом</small></span>
         </Link>
         <nav aria-label="Основная навигация" className="sidebar-nav">
@@ -60,7 +62,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <div className="sidebar-footer">Управление Telegram-каналом</div>
       </aside>
       <div className="mobile-header">
-        <Link href="/" className="brand"><span className="brand-mark">T</span><strong>Publisher</strong></Link>
+        <Link href="/" className="brand"><span className="brand-mark">{home ? <PublisherIcon name="plane" /> : "T"}</span><strong>Publisher</strong></Link>
         <span className="mobile-context">Панель управления</span>
       </div>
       <nav className="mobile-nav" aria-label="Навигация на мобильном устройстве">
